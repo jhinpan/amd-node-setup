@@ -1,0 +1,8 @@
+{
+  "apiHost": "https://REPLACE_WITH_ANYSCALE_API_HOST",
+  "sessionId": "REPLACE_WITH_WORKSPACE_SESSION_ID",
+  "cliToken": "REPLACE_WITH_ANYSCALE_CLI_TOKEN",
+  "headerHook": "",
+  "nodeExecutable": "",
+  "proxyScriptPath": ""
+}

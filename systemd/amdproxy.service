@@ -1,0 +1,15 @@
+[Unit]
+Description=AMD LLM Gateway Proxy for Claude Code
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/amd-node-runtime
+EnvironmentFile=-/etc/amd-node-runtime/amdproxy.env
+ExecStart=/usr/bin/python3 /opt/amd-node-runtime/proxy/amd_proxy.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

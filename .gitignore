@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.env
+node_modules/
+.DS_Store
+
+# Keep real node-local configs out of the public repo.
+anyscale-workspace-config.json
+amdproxy.env
+litellm-config.yaml
