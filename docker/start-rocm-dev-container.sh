@@ -127,10 +127,39 @@ if results:
   fi
 }
 
-first_existing_dir() {
+is_model_dir() {
+  local dir="$1"
+  [[ -d "${dir}" && -f "${dir}/config.json" ]] || return 1
+
+  compgen -G "${dir}/*.safetensors" >/dev/null \
+    || compgen -G "${dir}/*.bin" >/dev/null \
+    || compgen -G "${dir}/*.gguf" >/dev/null \
+    || [[ -f "${dir}/model.safetensors.index.json" ]] \
+    || return 1
+}
+
+has_model_tree() {
+  local root="$1"
+  local candidate
+  [[ -d "${root}" ]] || return 1
+
+  if is_model_dir "${root}"; then
+    return 0
+  fi
+
+  for candidate in "${root}"/* "${root}"/*/*; do
+    if [[ -d "${candidate}" ]] && is_model_dir "${candidate}"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+first_model_cache_root() {
   local candidate
   for candidate in "$@"; do
-    if [[ -n "${candidate}" && -d "${candidate}" ]]; then
+    if [[ -n "${candidate}" ]] && has_model_tree "${candidate}"; then
       echo "${candidate}"
       return 0
     fi
@@ -144,14 +173,18 @@ detect_model_cache() {
     return
   fi
 
-  first_existing_dir \
+  first_model_cache_root \
     /mnt/dcgpuval/huggingface \
     /mnt/dcgpuval/models \
+    /mnt/dcgpuval \
     /data/huggingface \
     /data/models \
+    /data \
     /models \
     /mnt/models \
+    /scratch \
     /scratch/huggingface \
+    /scratch/models \
     "${HOME:-}/.cache/huggingface" \
     /sgl-workspace/models \
     || {

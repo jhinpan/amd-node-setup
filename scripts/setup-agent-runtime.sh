@@ -25,6 +25,8 @@ RUNTIME_DIR="${RUNTIME_DIR:-$HOME/.amd-node-setup}"
 RUNTIME_BIN_DIR="${RUNTIME_BIN_DIR:-${RUNTIME_DIR}/bin}"
 REPO_DIR="${AMD_NODE_SETUP_REPO:-${AMD_NODE_RUNTIME_REPO:-/opt/amd-node-setup}}"
 
+export PATH="$HOME/.local/bin:$PATH"
+
 fail() {
   echo "[ERROR] $*" >&2
   exit 1
