@@ -2,14 +2,21 @@
 
 Public-repo draft for setting up AMD ROCm model-serving/dev nodes.
 
-This repository is meant for the workflow where a human gives a Cursor agent a target container name, and the agent prepares the rest:
+This repository is meant for the workflow where a human gives a Cursor agent exactly two inputs, and the agent prepares the rest:
+
+1. the Docker container name
+2. the application API key from the LLM API Gateway
+
+The agent should then:
 
 1. detect whether the node is MI30x or MI35x class
 2. choose the latest stable `rocm720` `rocm/sgl-dev` Docker image for that GPU family
 3. detect likely model-cache and workspace mount paths on the node
 4. create a ROCm dev container with the expected GPU/Docker flags
 5. install `tmux`, `gh`, Claude Code, Codex CLI, and common tools inside the container
-6. configure the proxy path for Claude Code/Codex experiments
+6. configure container-local proxy/env files
+7. start AMDproxy in a `tmux` session
+8. leave the container ready for Claude Code, Codex, and model-serving tests
 
 No real keys, tokens, Anyscale sessions, websocket URLs, or node-private paths belong in this public repo.
 
@@ -24,6 +31,7 @@ The setup now has multiple scripts, proxy implementations, systemd templates, an
 ```text
 scripts/
   setup-dev-env.sh                 # installs tmux, gh, Node/npm, uv, Codex, Claude Code
+  setup-agent-runtime.sh           # writes local proxy/env files and starts AMDproxy in tmux
 docker/
   start-rocm-dev-container.sh      # creates the generic ROCm dev container
   litellm-config.example.yaml      # optional Anthropic/OpenAI bridge config
@@ -93,16 +101,32 @@ INSTALL_GH=0 bash scripts/setup-dev-env.sh
 
 ## Create a ROCm Dev Container
 
-From this repo on the host:
+From this repo on the host, provide the two required inputs:
 
 ```bash
-CONTAINER_NAME=my-amd-test bash docker/start-rocm-dev-container.sh
+CONTAINER_NAME=my-amd-test \
+LLM_GATEWAY_API_KEY=REPLACE_WITH_APPLICATION_KEY \
+bash docker/start-rocm-dev-container.sh
 ```
 
 Preview detection and the generated Docker command without creating a container:
 
 ```bash
-DRY_RUN=1 CONTAINER_NAME=my-amd-test bash docker/start-rocm-dev-container.sh
+DRY_RUN=1 \
+CONTAINER_NAME=my-amd-test \
+LLM_GATEWAY_API_KEY=REPLACE_WITH_APPLICATION_KEY \
+bash docker/start-rocm-dev-container.sh
+```
+
+The dry-run output masks the key.
+
+To avoid putting the key in shell history, the agent can read it first:
+
+```bash
+read -rsp "LLM Gateway application key: " LLM_GATEWAY_API_KEY
+echo
+export LLM_GATEWAY_API_KEY
+CONTAINER_NAME=my-amd-test bash docker/start-rocm-dev-container.sh
 ```
 
 The script will:
@@ -115,6 +139,8 @@ The script will:
 - detect likely model mounts such as `/mnt/dcgpuval/huggingface`, `/data/huggingface`, `/data/models`, `/models`, and `~/.cache/huggingface`
 - detect/create a workspace mount
 - run `scripts/setup-dev-env.sh` inside the container
+- run `scripts/setup-agent-runtime.sh` inside the container
+- start `proxy/amd_proxy.py` in a `tmux` session named `amdproxy`
 
 Example images used as fallbacks:
 
@@ -159,7 +185,16 @@ Attach to the container:
 docker exec -it my-amd-test tmux new -A -s agent
 ```
 
-Then the agent can inspect `/sgl-workspace/models`, choose a model, and launch SGLang with the model-specific flags required for that test.
+Inside the container, the runtime setup writes local files under `~/.amd-node-runtime/`:
+
+```text
+amdproxy.env      # contains AMD_LLM_API_KEY and proxy bind settings
+claude-env.sh     # Claude Code proxy env
+codex-env.sh      # Codex API-key/base-url env placeholders
+env.sh            # sources Claude/Codex env
+```
+
+These files are container-local and not committed to the public repo. The agent can then inspect `/sgl-workspace/models`, choose a model, and launch SGLang with the model-specific flags required for that test.
 
 ## Override Detection
 
@@ -167,6 +202,7 @@ The agent can override anything explicitly:
 
 ```bash
 CONTAINER_NAME=my-test \
+LLM_GATEWAY_API_KEY=REPLACE_WITH_APPLICATION_KEY \
 GPU_FAMILY=mi30x \
 IMAGE=rocm/sgl-dev:v0.5.13.post1-rocm720-mi30x-20260620 \
 HOST_MODEL_CACHE=/mnt/dcgpuval/huggingface \
@@ -176,7 +212,7 @@ bash docker/start-rocm-dev-container.sh
 
 ## AMDproxy for Claude Code
 
-For AMD corporate gateway:
+For AMD corporate gateway, the container setup runs this automatically in `tmux` when `LLM_GATEWAY_API_KEY` is provided. Manual form:
 
 ```bash
 python3 -m venv .venv
@@ -247,8 +283,10 @@ Example human instruction to Cursor:
 
 ```text
 Use this repo to create a ROCm dev container named qwen-test.
+The LLM Gateway application API key is: <paste key>.
 Detect whether this node is MI30x or MI35x, choose the latest stable rocm720 rocm/sgl-dev image,
 mount the local model cache and workspace, install tmux/gh/Claude Code/Codex inside the container,
-then attach a tmux session and prepare the proxy settings for Claude Code.
+prepare the proxy settings for Claude Code and Codex, start AMDproxy in tmux,
+then attach a tmux session.
 Do not commit secrets.
 ```

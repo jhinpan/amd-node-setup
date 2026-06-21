@@ -3,6 +3,7 @@
 Decisions already made:
 
 - Publish as a full public GitHub repo.
+- Human input contract is two values: container name and LLM Gateway application API key.
 - Keep `gh auth login` manual.
 - Use `SHM_SIZE=128G`.
 - Keep `--privileged`.
@@ -26,5 +27,6 @@ Still worth validating on a real MI node:
   - Confirm npm global installs land on PATH.
   - Confirm `claude --version` and `codex --version` work after setup.
 - Proxy path:
-  - Confirm whether the default experiment uses `proxy/amd_proxy.py`, LiteLLM, or both.
-  - Confirm whether `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or both are needed for the exact Claude Code version in use.
+  - `scripts/setup-agent-runtime.sh` starts `proxy/amd_proxy.py` in tmux by default.
+  - It writes both `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` for Claude Code compatibility.
+  - It prepares `OPENAI_API_KEY` for Codex, but Codex may still require `codex login` or an OpenAI-compatible gateway/base URL depending on release/account policy.

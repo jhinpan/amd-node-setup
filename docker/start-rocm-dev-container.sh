@@ -3,8 +3,12 @@ set -Eeuo pipefail
 
 # Create a generic ROCm SGLang dev container for agent work.
 #
+# Required human inputs:
+#   CONTAINER_NAME=my-test
+#   LLM_GATEWAY_API_KEY=<application key from the LLM API Gateway>
+#
 # The intended workflow is:
-#   CONTAINER_NAME=my-test bash docker/start-rocm-dev-container.sh
+#   CONTAINER_NAME=my-test LLM_GATEWAY_API_KEY=... bash docker/start-rocm-dev-container.sh
 # Then attach:
 #   docker exec -it my-test tmux new -A -s agent
 #
@@ -17,7 +21,10 @@ set -Eeuo pipefail
 #   SGLANG_USE_AITER=1
 #   SGLANG_ROCM_FUSED_DECODE_MLA=0
 
-CONTAINER_NAME="${CONTAINER_NAME:-amd-rocm-dev}"
+CONTAINER_NAME="${CONTAINER_NAME:-}"
+LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY:-${AMD_LLM_API_KEY:-}}"
+LLM_GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL:-https://llm-api.amd.com}"
+LLM_GATEWAY_OPENAI_BASE_URL="${LLM_GATEWAY_OPENAI_BASE_URL:-}"
 SHM_SIZE="${SHM_SIZE:-128G}"
 HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 SGLANG_USE_AITER="${SGLANG_USE_AITER:-1}"
@@ -30,6 +37,18 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+if [[ -z "${CONTAINER_NAME}" ]]; then
+  echo "ERROR: CONTAINER_NAME is required" >&2
+  echo "Example: CONTAINER_NAME=my-test LLM_GATEWAY_API_KEY=... bash docker/start-rocm-dev-container.sh" >&2
+  exit 1
+fi
+
+if [[ -z "${LLM_GATEWAY_API_KEY}" ]]; then
+  echo "ERROR: LLM_GATEWAY_API_KEY is required" >&2
+  echo "Provide the application API key from the LLM API Gateway." >&2
+  exit 1
+fi
 
 detect_gpu_family() {
   if [[ -n "${GPU_FAMILY:-}" ]]; then
@@ -174,6 +193,10 @@ docker_args=(
   -e HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES}"
   -e SGLANG_USE_AITER="${SGLANG_USE_AITER}"
   -e SGLANG_ROCM_FUSED_DECODE_MLA="${SGLANG_ROCM_FUSED_DECODE_MLA}"
+  -e LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY}"
+  -e AMD_LLM_API_KEY="${LLM_GATEWAY_API_KEY}"
+  -e LLM_GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL}"
+  -e AMD_LLM_BASE_URL="${LLM_GATEWAY_BASE_URL}"
   -e HF_HOME=/sgl-workspace/models
   -e AMD_NODE_RUNTIME_REPO=/opt/amd-node-runtime
   -v "${repo_root}:/opt/amd-node-runtime:ro"
@@ -184,12 +207,16 @@ if [[ -n "${model_cache}" ]]; then
   docker_args+=(-v "${model_cache}:/sgl-workspace/models")
 fi
 
+if [[ -n "${LLM_GATEWAY_OPENAI_BASE_URL}" ]]; then
+  docker_args+=(-e "LLM_GATEWAY_OPENAI_BASE_URL=${LLM_GATEWAY_OPENAI_BASE_URL}")
+fi
+
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
 if [[ "${INSTALL_TOOLS}" == "1" ]]; then
-  container_cmd="/opt/amd-node-runtime/scripts/setup-dev-env.sh && ${KEEP_CONTAINER_ALIVE_CMD}"
+  container_cmd="/opt/amd-node-runtime/scripts/setup-dev-env.sh && /opt/amd-node-runtime/scripts/setup-agent-runtime.sh && ${KEEP_CONTAINER_ALIVE_CMD}"
 else
-  container_cmd="${KEEP_CONTAINER_ALIVE_CMD}"
+  container_cmd="/opt/amd-node-runtime/scripts/setup-agent-runtime.sh && ${KEEP_CONTAINER_ALIVE_CMD}"
 fi
 
 echo "GPU family       : ${gpu_family}"
@@ -197,14 +224,24 @@ echo "Docker image     : ${image}"
 echo "Container name   : ${CONTAINER_NAME}"
 echo "Shared memory    : ${SHM_SIZE}"
 echo "SGLANG_USE_AITER : ${SGLANG_USE_AITER}"
+echo "LLM Gateway key  : provided"
 echo "Model cache      : ${model_cache:-<none detected>}"
 echo "Workspace        : ${workspace}"
 
 if [[ "${DRY_RUN}" == "1" ]]; then
+  sanitized_docker_args=("${docker_args[@]}")
+  for i in "${!sanitized_docker_args[@]}"; do
+    case "${sanitized_docker_args[$i]}" in
+      LLM_GATEWAY_API_KEY=*|AMD_LLM_API_KEY=*)
+        sanitized_docker_args[$i]="${sanitized_docker_args[$i]%%=*}=<redacted>"
+        ;;
+    esac
+  done
+
   echo
   echo "Dry run docker command:"
   printf 'docker'
-  printf ' %q' "${docker_args[@]}" "${image}" bash -lc "${container_cmd}"
+  printf ' %q' "${sanitized_docker_args[@]}" "${image}" bash -lc "${container_cmd}"
   printf '\n'
   exit 0
 fi
