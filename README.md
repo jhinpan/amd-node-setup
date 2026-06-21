@@ -11,6 +11,28 @@ The agent then detects the node, creates the ROCm dev container, installs the ag
 
 No real API keys, tokens, node-private mount paths, reverse SSH tunnel details, or account-specific gateway internals belong in this public repo.
 
+## Bare-Metal Node Flow
+
+This flow assumes the agent is already logged into the target bare-metal AMD node, usually an MI300/MI300X/MI325 or MI350/MI355 machine. Docker should already be installed and usable by the agent on the host. The repo does not provision the node itself and does not create a reverse tunnel.
+
+![amd-node-setup bare-metal MI node flow](docs/setup-flow.svg)
+
+## Step Review
+
+| Step | What the agent does | Decision conditions | Installs or writes | Expected result |
+| --- | --- | --- | --- | --- |
+| 1. Start on node | Work directly on the target bare-metal MI node. | The node should already have shell access, Docker installed, and Docker permission. | Nothing yet. | Agent is operating on the same node that will host the ROCm dev container. |
+| 2. Collect two inputs | Require `CONTAINER_NAME` and `LLM_GATEWAY_API_KEY`. | If either value is missing, `docker/start-rocm-dev-container.sh` exits before Docker work. | Nothing committed; key is passed through env. | Human only needs to provide container name and LLM Gateway application key. |
+| 3. Detect GPU family | Read `rocm-smi`, `rocminfo`, and `lspci` output when available. | MI300/MI300X/MI325/gfx942 -> `mi30x`; MI350/MI355/gfx950 -> `mi35x`; unknown -> warn and default to `mi35x`; override with `GPU_FAMILY`. | Nothing installed. | Correct ROCm/SGLang Docker image family is selected. |
+| 4. Select image | Query Docker Hub for the newest stable `v*.rocm720-{family}-YYYYMMDD` tag. | If Docker Hub query fails or no matching tag is found, use the 2026-06-20 fallback image for the detected family. | Nothing installed. | Container uses latest stable `rocm720` image for MI30x or MI35x. |
+| 5. Detect mounts | Search common model-cache and workspace locations. | Model cache candidates include `/mnt/dcgpuval/huggingface`, `/data/huggingface`, `/data/models`, `/models`, `/mnt/models`, `/scratch/huggingface`, `~/.cache/huggingface`; override with `HOST_MODEL_CACHE`. Workspace prefers `/mnt/dcgpuval/sgl-workspace`, `/workspace`, `~/sgl-workspace`, then `/tmp/sgl-workspace`; override with `HOST_WORKSPACE`. | Creates the workspace directory unless `DRY_RUN=1`. | `/sgl-workspace/models` and `/sgl-workspace/workspace` are mounted when available. |
+| 6. Create container | Run Docker with host networking and ROCm device access. | Always uses `--network=host`, `--ipc=host`, `--privileged`, `--shm-size 128G`, `/dev/kfd`, `/dev/dri`, `CAP_SYS_ADMIN`, `SYS_PTRACE`, unconfined seccomp/apparmor. | Sets `SGLANG_USE_AITER=1`, `SGLANG_ROCM_FUSED_DECODE_MLA=0`, `HF_HOME=/sgl-workspace/models`, repo mount at `/opt/amd-node-setup`. | Detached ROCm dev container starts and keeps running. |
+| 7. Install base tools | Run `scripts/setup-dev-env.sh` inside the container. | Debian/Ubuntu-style container expected. Node defaults to 20 LTS; `INSTALL_*` flags can skip selected tools. | Installs apt packages: `tmux`, `git`, `curl`, `wget`, `jq`, `ripgrep`, `rsync`, `openssh-client`, `vim`, `htop`, `python3`, `pip`, `venv`, `python3-requests`, build tools, Node/npm, `uv`, and `gh`. | Container has shell/dev tooling and GitHub CLI; `gh auth login` remains manual. |
+| 8. Install agent CLIs | Prefer native installers for Codex and Claude Code. | Codex native install runs with `CODEX_NON_INTERACTIVE=1`; Claude native install uses `CLAUDE_NATIVE_CHANNEL=latest`; if native install fails and fallback is enabled, npm installs are used. | Native path installs `codex` and `claude` into `~/.local/bin`; npm fallback installs `@openai/codex@latest` and `@anthropic-ai/claude-code@latest`. | `codex --version` and `claude --version` should work. Rerunning the setup updates both CLIs. |
+| 9. Configure runtime | Run `scripts/setup-agent-runtime.sh` inside the container. | Requires the LLM Gateway key from step 2. If an existing non-generated `~/.codex/config.toml` exists, it is backed up first. | Writes `~/.amd-node-setup/*`, PATH wrappers for `claude` and `codex`, and `~/.codex/config.toml`. | Claude defaults to Opus 4.8 ultracode/xhigh; Codex defaults to GPT 5.5 ultrahigh represented as `xhigh`. |
+| 10. Start proxies | Start two tmux sessions. | Always local to the container/node; no reverse SSH tunnel. `LLM_GATEWAY_OPENAI_BASE_URL` can override the Codex upstream if AMD's OpenAI-compatible gateway base differs. | Starts `amdproxy-claude` on `127.0.0.1:8082` and `amdproxy-codex` on `127.0.0.1:8083`. | Claude Code and Codex can route through local AMD gateway proxies. |
+| 11. Ready state | Attach and verify before model serving tests. | Do not launch model-specific SGLang commands until the agent inspects the node and target model path. | No more default installs. | Run health checks, inspect `/sgl-workspace/models`, then choose test-specific SGLang launch flags. |
+
 ## What This Sets Up
 
 - A ROCm/SGLang dev container selected for MI30x or MI35x class GPUs.

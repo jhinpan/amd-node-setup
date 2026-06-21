@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="2240" viewBox="0 0 1200 2240" role="img" aria-labelledby="title desc">
+  <title id="title">amd-node-setup bare-metal MI node workflow</title>
+  <desc id="desc">Flowchart for setting up an AMD MI300 or MI350 bare-metal node with a ROCm SGLang Docker container, native Claude Code and Codex installs, and two local AMD gateway proxy sessions.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="14" markerHeight="14" refX="10" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#31506f"/>
+    </marker>
+    <style>
+      .bg { fill: #f7f9fb; }
+      .box { fill: #ffffff; stroke: #31506f; stroke-width: 2.5; rx: 14; }
+      .box-soft { fill: #eef6f3; stroke: #2f6b5d; stroke-width: 2.5; rx: 14; }
+      .decision { fill: #fff7e8; stroke: #8a5a16; stroke-width: 2.5; }
+      .warn { fill: #fff1f0; stroke: #9a3d35; stroke-width: 2.5; rx: 14; }
+      .title { font: 700 30px Arial, sans-serif; fill: #182431; }
+      .subtitle { font: 400 17px Arial, sans-serif; fill: #4d5f73; }
+      .label { font: 700 18px Arial, sans-serif; fill: #1f2d3a; }
+      .text { font: 400 15px Arial, sans-serif; fill: #314154; }
+      .small { font: 400 13px Arial, sans-serif; fill: #53657a; }
+      .edge { stroke: #31506f; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .edge-soft { stroke: #55748f; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .tag { font: 700 13px Arial, sans-serif; fill: #ffffff; }
+      .tag-bg { fill: #31506f; rx: 11; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="2240"/>
+  <text class="title" x="600" y="54" text-anchor="middle">amd-node-setup Flow for Bare-Metal MI300 / MI350 Nodes</text>
+  <text class="subtitle" x="600" y="84" text-anchor="middle">Assumption: the agent is already on the target node; no reverse tunnel and no model-specific SGLang launch yet.</text>
+
+  <rect class="box" x="310" y="120" width="580" height="96"/>
+  <text class="label" x="600" y="152" text-anchor="middle">Start on Target AMD Node</text>
+  <text class="text" x="600" y="178" text-anchor="middle">Bare-metal MI300 / MI300X / MI325 or MI350 / MI355 machine</text>
+  <text class="small" x="600" y="201" text-anchor="middle">Agent should already have shell access and Docker permission on this node.</text>
+
+  <path class="edge" d="M600 216 L600 260"/>
+
+  <rect class="box-soft" x="310" y="260" width="580" height="104"/>
+  <text class="label" x="600" y="292" text-anchor="middle">Two Required Inputs</text>
+  <text class="text" x="600" y="319" text-anchor="middle">1. CONTAINER_NAME</text>
+  <text class="text" x="600" y="342" text-anchor="middle">2. LLM_GATEWAY_API_KEY from the LLM API Gateway application</text>
+
+  <path class="edge" d="M600 364 L600 414"/>
+
+  <rect class="box" x="310" y="414" width="580" height="112"/>
+  <text class="label" x="600" y="446" text-anchor="middle">Run Host Bootstrap Script</text>
+  <text class="text" x="600" y="474" text-anchor="middle">bash docker/start-rocm-dev-container.sh</text>
+  <text class="small" x="600" y="500" text-anchor="middle">Validates both inputs before doing Docker work; DRY_RUN=1 only prints a masked command.</text>
+
+  <path class="edge" d="M600 526 L600 572"/>
+
+  <polygon class="decision" points="600,572 820,650 600,728 380,650"/>
+  <text class="label" x="600" y="628" text-anchor="middle">GPU Family?</text>
+  <text class="text" x="600" y="654" text-anchor="middle">rocm-smi, rocminfo, lspci</text>
+  <text class="small" x="600" y="678" text-anchor="middle">Can override with GPU_FAMILY=mi30x or mi35x</text>
+
+  <path class="edge-soft" d="M380 650 L178 650 L178 800"/>
+  <path class="edge-soft" d="M820 650 L1022 650 L1022 800"/>
+  <rect class="tag-bg" x="118" y="629" width="120" height="28"/>
+  <text class="tag" x="178" y="648" text-anchor="middle">MI300 path</text>
+  <rect class="tag-bg" x="962" y="629" width="120" height="28"/>
+  <text class="tag" x="1022" y="648" text-anchor="middle">MI350 path</text>
+
+  <rect class="box" x="70" y="800" width="360" height="116"/>
+  <text class="label" x="250" y="833" text-anchor="middle">MI30x Image Track</text>
+  <text class="text" x="250" y="861" text-anchor="middle">MI300 / MI300X / MI325 / gfx942</text>
+  <text class="small" x="250" y="889" text-anchor="middle">Select latest stable rocm720-mi30x tag</text>
+  <text class="small" x="250" y="910" text-anchor="middle">Fallback: v0.5.13.post1-rocm720-mi30x-20260620</text>
+
+  <rect class="box" x="770" y="800" width="360" height="116"/>
+  <text class="label" x="950" y="833" text-anchor="middle">MI35x Image Track</text>
+  <text class="text" x="950" y="861" text-anchor="middle">MI350 / MI355 / gfx950</text>
+  <text class="small" x="950" y="889" text-anchor="middle">Select latest stable rocm720-mi35x tag</text>
+  <text class="small" x="950" y="910" text-anchor="middle">Fallback: v0.5.13.post1-rocm720-mi35x-20260620</text>
+
+  <path class="edge-soft" d="M250 916 L250 978 L600 978"/>
+  <path class="edge-soft" d="M950 916 L950 978 L600 978"/>
+  <path class="edge" d="M600 978 L600 1022"/>
+
+  <rect class="box" x="310" y="1022" width="580" height="126"/>
+  <text class="label" x="600" y="1056" text-anchor="middle">Detect Mounts and Workspace</text>
+  <text class="text" x="600" y="1084" text-anchor="middle">Model cache candidates: /mnt/dcgpuval, /data, /models, /scratch, ~/.cache</text>
+  <text class="small" x="600" y="1111" text-anchor="middle">Workspace: /mnt/dcgpuval/sgl-workspace, /workspace, ~/sgl-workspace, or /tmp</text>
+  <text class="small" x="600" y="1133" text-anchor="middle">Overrides: HOST_MODEL_CACHE and HOST_WORKSPACE</text>
+
+  <path class="edge" d="M600 1148 L600 1196"/>
+
+  <rect class="box-soft" x="250" y="1196" width="700" height="140"/>
+  <text class="label" x="600" y="1230" text-anchor="middle">Create ROCm Dev Container</text>
+  <text class="text" x="600" y="1258" text-anchor="middle">docker run --network=host --ipc=host --privileged --shm-size 128G</text>
+  <text class="small" x="600" y="1285" text-anchor="middle">Adds /dev/kfd, /dev/dri, CAP_SYS_ADMIN, SYS_PTRACE, unconfined seccomp/apparmor</text>
+  <text class="small" x="600" y="1307" text-anchor="middle">Sets SGLANG_USE_AITER=1, SGLANG_ROCM_FUSED_DECODE_MLA=0, HF_HOME=/sgl-workspace/models</text>
+
+  <path class="edge" d="M600 1336 L600 1382"/>
+
+  <rect class="box" x="250" y="1382" width="700" height="122"/>
+  <text class="label" x="600" y="1416" text-anchor="middle">Inside Container: Install Dev Tools</text>
+  <text class="text" x="600" y="1444" text-anchor="middle">apt packages: tmux, git, curl, gh, jq, ripgrep, Python, uv, build tools</text>
+  <text class="small" x="600" y="1471" text-anchor="middle">Node 20/npm installed for dependencies and fallback CLI installs</text>
+
+  <path class="edge" d="M600 1504 L600 1548"/>
+
+  <rect class="box" x="250" y="1548" width="700" height="96"/>
+  <text class="label" x="600" y="1581" text-anchor="middle">Install / Update Agent CLIs</text>
+  <text class="text" x="600" y="1609" text-anchor="middle">Codex native installer; Claude Code native installer latest channel</text>
+  <text class="small" x="600" y="1631" text-anchor="middle">If native install fails, npm fallback can install @openai/codex and @anthropic-ai/claude-code</text>
+
+  <path class="edge" d="M600 1644 L600 1688"/>
+
+  <rect class="box" x="250" y="1688" width="700" height="132"/>
+  <text class="label" x="600" y="1722" text-anchor="middle">Configure Agent Runtime</text>
+  <text class="text" x="600" y="1750" text-anchor="middle">Write ~/.amd-node-setup env files and PATH wrappers for claude/codex</text>
+  <text class="small" x="600" y="1777" text-anchor="middle">Write ~/.codex/config.toml: model=gpt-5.5, effort=xhigh, openai_base_url=http://127.0.0.1:8083/v1</text>
+  <text class="small" x="600" y="1799" text-anchor="middle">Pin Claude Code to claude-opus-4-8 and enable ultracode through the wrapper</text>
+
+  <path class="edge" d="M600 1820 L600 1866"/>
+
+  <rect class="box-soft" x="110" y="1866" width="440" height="138"/>
+  <text class="label" x="330" y="1900" text-anchor="middle">Start Claude Proxy</text>
+  <text class="text" x="330" y="1928" text-anchor="middle">tmux session: amdproxy-claude</text>
+  <text class="text" x="330" y="1952" text-anchor="middle">local URL: http://127.0.0.1:8082</text>
+  <text class="small" x="330" y="1979" text-anchor="middle">Mode: Anthropic Messages API to AMD /claude3/{model}/chat/completions</text>
+
+  <rect class="box-soft" x="650" y="1866" width="440" height="138"/>
+  <text class="label" x="870" y="1900" text-anchor="middle">Start Codex Proxy</text>
+  <text class="text" x="870" y="1928" text-anchor="middle">tmux session: amdproxy-codex</text>
+  <text class="text" x="870" y="1952" text-anchor="middle">local URL: http://127.0.0.1:8083</text>
+  <text class="small" x="870" y="1979" text-anchor="middle">Mode: OpenAI-compatible passthrough to LLM_GATEWAY_OPENAI_BASE_URL</text>
+
+  <path class="edge-soft" d="M600 1840 L330 1840 L330 1866"/>
+  <path class="edge-soft" d="M600 1840 L870 1840 L870 1866"/>
+  <path class="edge-soft" d="M330 2004 L330 2052 L600 2052"/>
+  <path class="edge-soft" d="M870 2004 L870 2052 L600 2052"/>
+  <path class="edge" d="M600 2052 L600 2090"/>
+
+  <rect class="box" x="250" y="2090" width="700" height="112"/>
+  <text class="label" x="600" y="2124" text-anchor="middle">Ready for Agent Work</text>
+  <text class="text" x="600" y="2152" text-anchor="middle">Attach with docker exec -it CONTAINER_NAME tmux new -A -s agent</text>
+  <text class="small" x="600" y="2179" text-anchor="middle">Run health checks, inspect /sgl-workspace/models, then choose model-specific SGLang launch flags</text>
+</svg>
