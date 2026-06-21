@@ -184,8 +184,10 @@ umask 077
 
 {
   write_export ANTHROPIC_BASE_URL "http://127.0.0.1:${CLAUDE_PROXY_PORT}"
+  # Only set ANTHROPIC_AUTH_TOKEN. Setting ANTHROPIC_API_KEY as well makes
+  # Claude Code warn that auth "may not work as expected"; the proxy injects
+  # the real gateway key (Ocp-Apim-Subscription-Key) regardless of this value.
   write_export ANTHROPIC_AUTH_TOKEN "not-used"
-  write_export ANTHROPIC_API_KEY "not-used"
   write_export ANTHROPIC_MODEL "${CLAUDE_MODEL}"
   write_export ANTHROPIC_DEFAULT_OPUS_MODEL "${CLAUDE_MODEL}"
   write_export ANTHROPIC_DEFAULT_OPUS_MODEL_NAME "Opus 4.8 via AMD Gateway"
@@ -194,7 +196,6 @@ umask 077
   write_export CLAUDE_CODE_EFFORT_LEVEL "${CLAUDE_EFFORT}"
   write_export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY "1"
   write_export CLAUDE_ULTRACODE "${CLAUDE_ULTRACODE}"
-  write_export DISABLE_PROMPT_CACHING "1"
 } > "${RUNTIME_DIR}/claude-env.sh"
 
 {
