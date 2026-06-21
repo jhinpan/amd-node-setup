@@ -42,26 +42,45 @@ docs/
   review-questions.md
 ```
 
-## Current CLI Requirements
+## Current CLI Installation
 
 Checked on 2026-06-21:
 
+- OpenAI Codex CLI docs recommend the standalone installer on macOS/Linux:
+  `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
+- OpenAI docs say standalone Codex CLI installs are upgraded by rerunning that installer.
+- Claude Code docs recommend native install:
+  `curl -fsSL https://claude.ai/install.sh | bash`
+- Claude Code native installs auto-update in the background, and `claude update` applies an immediate manual update.
 - `@openai/codex@latest` npm metadata reports Node `>=16`.
 - `@anthropic-ai/claude-code@latest` npm metadata reports Node `>=18.0.0`.
-- This repo installs Node 20 LTS by default because Claude Code is stricter.
+- This repo still installs Node 20 LTS by default because npm is useful on dev nodes and remains the fallback path for both CLIs.
 
 References:
 
+- OpenAI Codex CLI setup: <https://developers.openai.com/codex/cli>
 - OpenAI Codex config basics: <https://developers.openai.com/codex/config-basic>
 - OpenAI Codex advanced config: <https://developers.openai.com/codex/config-advanced>
 - Anthropic Claude Code setup: <https://code.claude.com/docs/en/setup>
 - Anthropic Claude Code model config: <https://code.claude.com/docs/en/model-config>
 
-The bootstrap updates Claude Code and Codex on every run:
+The bootstrap installs/updates Claude Code and Codex with native installers by default:
 
 ```bash
-npm install -g @openai/codex@latest
-npm install -g @anthropic-ai/claude-code@latest
+curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+curl -fsSL https://claude.ai/install.sh | bash -s latest
+```
+
+If the native installer fails in a container, the script falls back to npm unless disabled:
+
+```bash
+CODEX_NPM_FALLBACK=0 CLAUDE_NPM_FALLBACK=0 bash scripts/setup-dev-env.sh
+```
+
+The npm path can also be selected explicitly:
+
+```bash
+CODEX_INSTALL_METHOD=npm CLAUDE_INSTALL_METHOD=npm bash scripts/setup-dev-env.sh
 ```
 
 GitHub CLI is installed, but authentication is intentionally manual:
@@ -170,8 +189,8 @@ amdproxy-codex.env     # Codex/OpenAI-compatible proxy settings for port 8083
 claude-env.sh          # Claude Code env
 codex-env.sh           # Codex env
 env.sh                 # PATH and shared shell env
-bin/claude             # wrapper around the npm Claude Code binary
-bin/codex              # wrapper around the npm Codex binary
+bin/claude             # wrapper around the installed Claude Code binary
+bin/codex              # wrapper around the installed Codex binary
 ```
 
 It also writes `~/.codex/config.toml` with:

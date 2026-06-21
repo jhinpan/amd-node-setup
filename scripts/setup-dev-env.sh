@@ -6,7 +6,7 @@
 #   - Python helpers: python3, pip, venv, uv
 #   - Node.js + npm, defaulting to Node 20 LTS
 #   - GitHub CLI: gh
-#   - agent CLIs: codex and claude
+#   - agent CLIs: codex and claude, using native installers first
 #
 # Usage:
 #   curl -fsSL RAW_URL/scripts/setup-dev-env.sh | bash
@@ -19,6 +19,11 @@ INSTALL_CODEX="${INSTALL_CODEX:-1}"
 INSTALL_CLAUDE="${INSTALL_CLAUDE:-1}"
 INSTALL_GH="${INSTALL_GH:-1}"
 INSTALL_UV="${INSTALL_UV:-1}"
+CODEX_INSTALL_METHOD="${CODEX_INSTALL_METHOD:-native}"
+CLAUDE_INSTALL_METHOD="${CLAUDE_INSTALL_METHOD:-native}"
+CODEX_NPM_FALLBACK="${CODEX_NPM_FALLBACK:-1}"
+CLAUDE_NPM_FALLBACK="${CLAUDE_NPM_FALLBACK:-1}"
+CLAUDE_NATIVE_CHANNEL="${CLAUDE_NATIVE_CHANNEL:-latest}"
 DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 export DEBIAN_FRONTEND
 
@@ -54,6 +59,15 @@ else
 fi
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+ensure_local_bin_path() {
+  if [[ ":${PATH}:" != *":${HOME}/.local/bin:"* ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+  if [[ -f "$HOME/.bashrc" ]] && ! grep -Fq 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc"; then
+    printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+  fi
+}
 
 apt_install() {
   "${SUDO[@]}" apt-get install -y -qq "$@"
@@ -106,10 +120,7 @@ install_uv() {
 
   info "Installing uv"
   curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
-  if [[ -f "$HOME/.bashrc" ]] && ! grep -Fq 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc"; then
-    printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
-  fi
+  ensure_local_bin_path
   success "uv installed: $(uv --version)"
 }
 
@@ -142,20 +153,97 @@ install_gh() {
 
 install_agent_clis() {
   if [[ "$INSTALL_CODEX" == "1" ]]; then
-    info "Installing/updating OpenAI Codex CLI to npm latest"
-    npm install -g @openai/codex@latest
-    success "codex available: $(codex --version 2>/dev/null || echo installed)"
+    install_codex
   else
     warn "Skipping codex because INSTALL_CODEX=${INSTALL_CODEX}"
   fi
 
   if [[ "$INSTALL_CLAUDE" == "1" ]]; then
-    info "Installing/updating Claude Code CLI to npm latest"
-    npm install -g @anthropic-ai/claude-code@latest
-    success "claude available: $(claude --version 2>/dev/null || echo installed)"
+    install_claude
   else
     warn "Skipping claude because INSTALL_CLAUDE=${INSTALL_CLAUDE}"
   fi
+}
+
+install_codex_npm() {
+  info "Installing/updating OpenAI Codex CLI with npm fallback"
+  npm install -g @openai/codex@latest
+  success "codex available: $(codex --version 2>/dev/null || echo installed)"
+}
+
+install_codex_native() {
+  ensure_local_bin_path
+  info "Installing/updating OpenAI Codex CLI with the standalone installer"
+  if curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh; then
+    ensure_local_bin_path
+    success "codex available: $(codex --version 2>/dev/null || echo installed)"
+    return 0
+  fi
+  return 1
+}
+
+install_codex() {
+  case "${CODEX_INSTALL_METHOD}" in
+    native)
+      if install_codex_native; then
+        return
+      fi
+      if [[ "${CODEX_NPM_FALLBACK}" == "1" ]]; then
+        warn "Codex native installer failed; falling back to npm"
+        install_codex_npm
+        return
+      fi
+      fail "Codex native installer failed and CODEX_NPM_FALLBACK=${CODEX_NPM_FALLBACK}"
+      ;;
+    npm)
+      install_codex_npm
+      ;;
+    *)
+      fail "Unsupported CODEX_INSTALL_METHOD=${CODEX_INSTALL_METHOD}; use native or npm"
+      ;;
+  esac
+}
+
+install_claude_npm() {
+  info "Installing/updating Claude Code CLI with npm fallback"
+  npm install -g @anthropic-ai/claude-code@latest
+  success "claude available: $(claude --version 2>/dev/null || echo installed)"
+}
+
+install_claude_native() {
+  ensure_local_bin_path
+  info "Installing/updating Claude Code with the native installer (${CLAUDE_NATIVE_CHANNEL})"
+  if curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_NATIVE_CHANNEL}"; then
+    ensure_local_bin_path
+    if have claude; then
+      claude update >/dev/null 2>&1 || warn "claude update did not complete; native install still finished"
+    fi
+    success "claude available: $(claude --version 2>/dev/null || echo installed)"
+    return 0
+  fi
+  return 1
+}
+
+install_claude() {
+  case "${CLAUDE_INSTALL_METHOD}" in
+    native)
+      if install_claude_native; then
+        return
+      fi
+      if [[ "${CLAUDE_NPM_FALLBACK}" == "1" ]]; then
+        warn "Claude Code native installer failed; falling back to npm"
+        install_claude_npm
+        return
+      fi
+      fail "Claude Code native installer failed and CLAUDE_NPM_FALLBACK=${CLAUDE_NPM_FALLBACK}"
+      ;;
+    npm)
+      install_claude_npm
+      ;;
+    *)
+      fail "Unsupported CLAUDE_INSTALL_METHOD=${CLAUDE_INSTALL_METHOD}; use native or npm"
+      ;;
+  esac
 }
 
 print_summary() {
@@ -184,6 +272,7 @@ SUMMARY
 
 install_base_packages
 install_node
+ensure_local_bin_path
 install_uv
 install_gh
 install_agent_clis

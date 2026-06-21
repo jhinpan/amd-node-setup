@@ -16,6 +16,8 @@ Decisions already made:
   - `amdproxy-codex` on `127.0.0.1:8083`
 - Default Claude Code to Opus 4.8 with ultracode enabled through the generated wrapper.
 - Default Codex to GPT 5.5 with Codex `model_reasoning_effort = "xhigh"` for the requested ultrahigh behavior.
+- Use native installers as the default install/update path for Claude Code and Codex.
+- Keep npm installs available as explicit/fallback paths because Node/npm are useful dependencies on dev nodes.
 
 Still worth validating on a real MI node:
 
@@ -30,7 +32,8 @@ Still worth validating on a real MI node:
   - Add any canonical AMD node paths after first deployment.
 - `setup-dev-env.sh` in the selected `rocm/sgl-dev` image:
   - Confirm apt metadata is available.
-  - Confirm npm global installs land on PATH.
+  - Confirm native installs land on PATH through `~/.local/bin`.
+  - Confirm npm fallback still works when native installers are unavailable.
   - Confirm `claude --version` and `codex --version` work after setup.
 - Claude proxy path:
   - `proxy/amd_proxy.py` still uses the confirmed AMD Claude route `/claude3/{model}/chat/completions`.
