@@ -88,7 +88,7 @@ install_base_packages() {
   info "Installing base packages"
   apt_install \
     ca-certificates curl wget gnupg lsb-release apt-transport-https \
-    git openssh-client rsync tmux jq ripgrep vim htop less file \
+    git openssh-client rsync tmux jq ripgrep vim htop less file bubblewrap \
     python3 python3-pip python3-venv python3-requests build-essential
   success "Base packages installed"
 }

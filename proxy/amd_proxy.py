@@ -58,7 +58,7 @@ def json_dumps(obj: object) -> bytes:
 
 def join_upstream_url(base_url: str, request_path: str) -> str:
     path = "/" + request_path.lstrip("/")
-    if base_url.endswith("/v1") and path.startswith("/v1/"):
+    if base_url.endswith(("/v1", "/openai")) and path.startswith("/v1/"):
         path = path[len("/v1") :]
     return f"{base_url}{path}"
 
