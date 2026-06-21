@@ -47,6 +47,8 @@ This flow assumes the agent is already logged into the target bare-metal AMD nod
 
 This repo does not create a reverse SSH tunnel and does not launch a model-specific SGLang server by default. The agent should inspect `/sgl-workspace/models` and choose model-specific SGLang flags only after the container exists.
 
+Model weights and caches belong under `/sgl-workspace/models`. The writable workspace mount is `/sgl-workspace/workspace`; the setup does not create or use `/sgl-workspace/workspace/models`.
+
 ## Layout
 
 ```text
