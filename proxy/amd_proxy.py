@@ -1,60 +1,78 @@
 #!/usr/bin/env python3
-"""AMD LLM Gateway Proxy for Claude Code.
+"""Container-local AMD LLM Gateway proxy.
 
-Translates Anthropic Messages API requests into AMD corporate gateway format
-and returns responses in Anthropic format, including simulated SSE streaming.
+The same script runs in two modes:
 
-Usage:
-    export AMD_LLM_API_KEY="your-subscription-key"
-    python3 amd_proxy.py
-
-Then point Claude Code at it:
-    export ANTHROPIC_BASE_URL=http://localhost:8082
-    export ANTHROPIC_API_KEY=not-used
-    claude
+* ``PROXY_MODE=claude`` translates Anthropic Messages API requests from
+  Claude Code into AMD's Claude gateway route.
+* ``PROXY_MODE=openai`` forwards OpenAI-compatible requests from Codex to an
+  OpenAI-compatible gateway base URL.
 """
 
 import json
 import os
 import sys
 import uuid
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 
 import requests
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+
 AMD_LLM_API_KEY = os.environ.get("AMD_LLM_API_KEY", "")
-AMD_LLM_BASE_URL = os.environ.get("AMD_LLM_BASE_URL", "https://llm-api.amd.com")
+AMD_LLM_BASE_URL = os.environ.get("AMD_LLM_BASE_URL", "https://llm-api.amd.com").rstrip("/")
 PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", "8082"))
+PROXY_MODE = os.environ.get("PROXY_MODE", "claude").lower()
 AMD_TIMEOUT = int(os.environ.get("AMD_TIMEOUT", "120"))
 
-CLAUDE_ENDPOINT = "/claude3/{model}/chat/completions"
+CLAUDE_DEFAULT_MODEL = os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-opus-4-8")
+CLAUDE_ENDPOINT = os.environ.get(
+    "AMD_CLAUDE_ENDPOINT_TEMPLATE",
+    "/claude3/{model}/chat/completions",
+)
+
+CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.5")
+CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "xhigh")
+OPENAI_UPSTREAM_BASE_URL = os.environ.get(
+    "OPENAI_UPSTREAM_BASE_URL",
+    os.environ.get("LLM_GATEWAY_OPENAI_BASE_URL", f"{AMD_LLM_BASE_URL}/v1"),
+).rstrip("/")
 
 
-# ---------------------------------------------------------------------------
-# Translation helpers
-# ---------------------------------------------------------------------------
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+}
 
-def translate_request(body: dict) -> tuple[str, dict, dict]:
-    """Translate an Anthropic Messages API request body into AMD gateway format.
 
-    Returns (url, headers, amd_body).
-    """
-    model = body.get("model", "claude-sonnet-4-6")
+def json_dumps(obj: object) -> bytes:
+    return json.dumps(obj, separators=(",", ":")).encode("utf-8")
+
+
+def join_upstream_url(base_url: str, request_path: str) -> str:
+    path = "/" + request_path.lstrip("/")
+    if base_url.endswith("/v1") and path.startswith("/v1/"):
+        path = path[len("/v1") :]
+    return f"{base_url}{path}"
+
+
+def translate_claude_request(body: dict) -> tuple[str, dict, dict]:
+    """Translate an Anthropic Messages request into AMD Claude gateway format."""
+    model = body.get("model") or CLAUDE_DEFAULT_MODEL
     url = f"{AMD_LLM_BASE_URL}{CLAUDE_ENDPOINT.format(model=model)}"
-
     headers = {
         "Content-Type": "application/json",
         "Ocp-Apim-Subscription-Key": AMD_LLM_API_KEY,
     }
 
     messages = []
-
-    # Handle system prompt — string or list of content blocks
     system = body.get("system")
     if system:
         if isinstance(system, str):
@@ -63,13 +81,12 @@ def translate_request(body: dict) -> tuple[str, dict, dict]:
             text_parts = []
             for block in system:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block["text"])
+                    text_parts.append(block.get("text", ""))
                 elif isinstance(block, str):
                     text_parts.append(block)
             if text_parts:
                 messages.append({"role": "system", "content": "\n".join(text_parts)})
 
-    # Flatten message content to plain strings for the AMD gateway
     for msg in body.get("messages", []):
         content = msg.get("content", "")
         if isinstance(content, list):
@@ -83,23 +100,30 @@ def translate_request(body: dict) -> tuple[str, dict, dict]:
         messages.append({"role": msg["role"], "content": content})
 
     amd_body: dict = {"messages": messages}
-
-    # Pass through supported fields
-    if "max_tokens" in body:
-        amd_body["max_tokens"] = body["max_tokens"]
-    if "temperature" in body:
-        amd_body["temperature"] = body["temperature"]
+    for key in ("max_tokens", "temperature", "top_p", "stop"):
+        if key in body:
+            amd_body[key] = body[key]
 
     return url, headers, amd_body
 
 
-def translate_response(amd_data: dict, model: str) -> dict:
-    """Wrap an AMD gateway response into Anthropic Messages API format."""
-    # AMD returns: {"content": [{"text": "..."}]}
-    amd_content = amd_data.get("content", [])
+def translate_claude_response(amd_data: dict, model: str) -> dict:
+    """Wrap common AMD gateway response shapes into Anthropic Messages format."""
     text = ""
+
+    amd_content = amd_data.get("content", [])
     if amd_content and isinstance(amd_content, list):
-        text = amd_content[0].get("text", "")
+        first = amd_content[0]
+        if isinstance(first, dict):
+            text = first.get("text", "")
+        elif isinstance(first, str):
+            text = first
+
+    if not text and amd_data.get("choices"):
+        choice = amd_data["choices"][0]
+        message = choice.get("message", {})
+        content = message.get("content", "")
+        text = content if isinstance(content, str) else json.dumps(content)
 
     return {
         "id": f"msg_{uuid.uuid4().hex[:24]}",
@@ -114,79 +138,104 @@ def translate_response(amd_data: dict, model: str) -> dict:
 
 
 def build_sse_events(response_dict: dict) -> str:
-    """Generate a complete SSE event stream string for a buffered response."""
     msg_id = response_dict["id"]
     model = response_dict["model"]
     text = response_dict["content"][0]["text"]
-
     events = []
 
-    # message_start
-    msg_start = {
-        "type": "message_start",
-        "message": {
-            "id": msg_id,
-            "type": "message",
-            "role": "assistant",
-            "content": [],
-            "model": model,
-            "stop_reason": None,
-            "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
-        },
-    }
-    events.append(f"event: message_start\ndata: {json.dumps(msg_start)}\n")
-
-    # content_block_start
-    cb_start = {
-        "type": "content_block_start",
-        "index": 0,
-        "content_block": {"type": "text", "text": ""},
-    }
-    events.append(f"event: content_block_start\ndata: {json.dumps(cb_start)}\n")
-
-    # ping
-    events.append(f"event: ping\ndata: {{\"type\": \"ping\"}}\n")
-
-    # content_block_delta — deliver the full text in one delta
-    cb_delta = {
-        "type": "content_block_delta",
-        "index": 0,
-        "delta": {"type": "text_delta", "text": text},
-    }
-    events.append(f"event: content_block_delta\ndata: {json.dumps(cb_delta)}\n")
-
-    # content_block_stop
-    cb_stop = {"type": "content_block_stop", "index": 0}
-    events.append(f"event: content_block_stop\ndata: {json.dumps(cb_stop)}\n")
-
-    # message_delta
-    msg_delta = {
-        "type": "message_delta",
-        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-        "usage": {"output_tokens": 0},
-    }
-    events.append(f"event: message_delta\ndata: {json.dumps(msg_delta)}\n")
-
-    # message_stop
-    events.append(f"event: message_stop\ndata: {{\"type\": \"message_stop\"}}\n")
+    events.append(
+        "event: message_start\ndata: "
+        + json.dumps(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": msg_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": model,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            }
+        )
+        + "\n"
+    )
+    events.append(
+        "event: content_block_start\ndata: "
+        + json.dumps(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            }
+        )
+        + "\n"
+    )
+    events.append('event: ping\ndata: {"type":"ping"}\n')
+    events.append(
+        "event: content_block_delta\ndata: "
+        + json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": text},
+            }
+        )
+        + "\n"
+    )
+    events.append('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n')
+    events.append(
+        "event: message_delta\ndata: "
+        + json.dumps(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 0},
+            }
+        )
+        + "\n"
+    )
+    events.append('event: message_stop\ndata: {"type":"message_stop"}\n')
 
     return "\n".join(events)
 
 
-# ---------------------------------------------------------------------------
-# HTTP Handler
-# ---------------------------------------------------------------------------
+def patch_openai_request(path: str, raw_body: bytes) -> tuple[bytes, str]:
+    """Set default Codex model/effort when the client omits them."""
+    if not raw_body:
+        return raw_body, CODEX_DEFAULT_MODEL
+
+    try:
+        body = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return raw_body, CODEX_DEFAULT_MODEL
+
+    if not isinstance(body, dict):
+        return raw_body, CODEX_DEFAULT_MODEL
+
+    model = body.get("model") or CODEX_DEFAULT_MODEL
+    body["model"] = model
+
+    if path.endswith("/responses"):
+        reasoning = body.get("reasoning")
+        if not isinstance(reasoning, dict):
+            reasoning = {}
+        reasoning.setdefault("effort", CODEX_REASONING_EFFORT)
+        body["reasoning"] = reasoning
+
+    return json_dumps(body), model
+
 
 class ProxyHandler(BaseHTTPRequestHandler):
-    """Handle incoming Anthropic-format requests and proxy to AMD gateway."""
+    server_version = "amd-node-setup-proxy/1.0"
 
-    def log_message(self, format, *args):
-        """Prefix log lines with [proxy]."""
-        sys.stderr.write(f"[proxy] {args[0]}\n")
+    def log_message(self, fmt, *args):
+        sys.stderr.write(f"[{PROXY_MODE}:{PROXY_PORT}] {fmt % args}\n")
 
     def _send_json(self, code: int, obj: dict):
-        body = json.dumps(obj).encode()
+        body = json_dumps(obj)
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -194,15 +243,85 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_error(self, code: int, message: str):
-        self._send_json(code, {
-            "type": "error",
-            "error": {"type": "api_error", "message": message},
-        })
+        self._send_json(
+            code,
+            {"type": "error", "error": {"type": "api_error", "message": message}},
+        )
 
-    def do_POST(self):
+    def _send_openai_models(self):
+        models = os.environ.get("AMD_PROXY_MODELS", CODEX_DEFAULT_MODEL)
+        self._send_json(
+            200,
+            {
+                "object": "list",
+                "data": [
+                    {"id": model.strip(), "object": "model"}
+                    for model in models.split(",")
+                    if model.strip()
+                ],
+            },
+        )
+
+    def _proxy_openai(self):
+        path = urlparse(self.path).path
+        if path in {"/v1/models", "/models"} and self.command == "GET":
+            self._send_openai_models()
+            return
+
+        allowed_paths = (
+            "/v1/responses",
+            "/responses",
+            "/v1/chat/completions",
+            "/chat/completions",
+        )
+        if not path.endswith(allowed_paths):
+            self._send_error(404, f"Not found in openai mode: {self.path}")
+            return
+
+        length = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(length) if length else b""
+        upstream_body, model = patch_openai_request(path, raw_body)
+        upstream_url = join_upstream_url(OPENAI_UPSTREAM_BASE_URL, path)
+
+        headers = {
+            "Authorization": f"Bearer {AMD_LLM_API_KEY}",
+            "Ocp-Apim-Subscription-Key": AMD_LLM_API_KEY,
+            "Content-Type": self.headers.get("Content-Type", "application/json"),
+            "Accept": self.headers.get("Accept", "application/json"),
+        }
+
+        sys.stderr.write(f"[openai:{PROXY_PORT}] -> {upstream_url} model={model}\n")
+        try:
+            response = requests.request(
+                self.command,
+                upstream_url,
+                data=upstream_body,
+                headers=headers,
+                timeout=AMD_TIMEOUT,
+                stream=True,
+            )
+        except requests.exceptions.Timeout:
+            self._send_error(502, "OpenAI-compatible upstream timed out")
+            return
+        except requests.exceptions.ConnectionError as exc:
+            self._send_error(502, f"Cannot reach OpenAI-compatible upstream: {exc}")
+            return
+
+        self.send_response(response.status_code)
+        for key, value in response.headers.items():
+            if key.lower() not in HOP_BY_HOP_HEADERS:
+                self.send_header(key, value)
+        self.end_headers()
+
+        for chunk in response.iter_content(chunk_size=65536):
+            if chunk:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+
+    def _proxy_claude(self):
         path = urlparse(self.path).path
         if path != "/v1/messages":
-            self._send_error(404, f"Not found: {self.path}")
+            self._send_error(404, f"Not found in claude mode: {self.path}")
             return
 
         length = int(self.headers.get("Content-Length", 0))
@@ -214,40 +333,37 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         is_streaming = body.get("stream", False)
-        model = body.get("model", "claude-sonnet-4-6")
-
-        url, headers, amd_body = translate_request(body)
-        sys.stderr.write(f"[proxy] -> {url}  model={model}  stream={is_streaming}\n")
+        model = body.get("model") or CLAUDE_DEFAULT_MODEL
+        url, headers, amd_body = translate_claude_request(body)
+        sys.stderr.write(f"[claude:{PROXY_PORT}] -> {url} model={model} stream={is_streaming}\n")
 
         try:
-            r = requests.post(url, json=amd_body, headers=headers, timeout=AMD_TIMEOUT)
+            response = requests.post(url, json=amd_body, headers=headers, timeout=AMD_TIMEOUT)
         except requests.exceptions.Timeout:
-            self._send_error(502, "AMD gateway timed out")
+            self._send_error(502, "AMD Claude gateway timed out")
             return
         except requests.exceptions.ConnectionError as exc:
-            self._send_error(502, f"Cannot reach AMD gateway: {exc}")
+            self._send_error(502, f"Cannot reach AMD Claude gateway: {exc}")
             return
 
-        if r.status_code != 200:
+        if response.status_code != 200:
             try:
-                detail = r.json().get("message", r.text[:500])
+                detail = response.json().get("message", response.text[:500])
             except Exception:
-                detail = r.text[:500]
-            sys.stderr.write(f"[proxy] AMD error {r.status_code}: {detail}\n")
-            self._send_error(r.status_code, f"AMD gateway error: {detail}")
+                detail = response.text[:500]
+            sys.stderr.write(f"[claude:{PROXY_PORT}] AMD error {response.status_code}: {detail}\n")
+            self._send_error(response.status_code, f"AMD Claude gateway error: {detail}")
             return
 
         try:
-            amd_data = r.json()
+            amd_data = response.json()
         except Exception:
-            self._send_error(502, f"AMD returned non-JSON: {r.text[:500]}")
+            self._send_error(502, f"AMD returned non-JSON: {response.text[:500]}")
             return
 
-        sys.stderr.write(f"[proxy] AMD response OK for model={model}\n")
-        response_dict = translate_response(amd_data, model)
-
+        response_dict = translate_claude_response(amd_data, model)
         if is_streaming:
-            sse_body = build_sse_events(response_dict).encode()
+            sse_body = build_sse_events(response_dict).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -256,50 +372,69 @@ class ProxyHandler(BaseHTTPRequestHandler):
         else:
             self._send_json(200, response_dict)
 
+    def do_POST(self):
+        if PROXY_MODE == "openai":
+            self._proxy_openai()
+        elif PROXY_MODE == "claude":
+            self._proxy_claude()
+        else:
+            self._send_error(500, f"Unsupported PROXY_MODE={PROXY_MODE}")
+
     def do_GET(self):
         path = urlparse(self.path).path
-
         if path == "/health":
-            self._send_json(200, {"ok": True, "upstream": AMD_LLM_BASE_URL})
+            payload = {
+                "ok": True,
+                "mode": PROXY_MODE,
+                "port": PROXY_PORT,
+                "gateway": AMD_LLM_BASE_URL,
+            }
+            if PROXY_MODE == "openai":
+                payload["openai_upstream"] = OPENAI_UPSTREAM_BASE_URL
+            self._send_json(200, payload)
+            return
+
+        if PROXY_MODE == "openai":
+            self._proxy_openai()
             return
 
         if path == "/v1/models":
-            models = os.environ.get(
-                "AMD_PROXY_MODELS",
-                "claude-opus-4-6,claude-sonnet-4-6,claude-opus-4-5,claude-sonnet-4-5",
+            models = os.environ.get("AMD_PROXY_MODELS", CLAUDE_DEFAULT_MODEL)
+            self._send_json(
+                200,
+                {
+                    "object": "list",
+                    "data": [
+                        {"id": model.strip(), "object": "model"}
+                        for model in models.split(",")
+                        if model.strip()
+                    ],
+                },
             )
-            self._send_json(200, {
-                "object": "list",
-                "data": [
-                    {"id": model.strip(), "object": "model"}
-                    for model in models.split(",")
-                    if model.strip()
-                ],
-            })
             return
 
         self._send_error(404, f"Not found: {self.path}")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     if not AMD_LLM_API_KEY:
         print("Error: AMD_LLM_API_KEY environment variable is required.", file=sys.stderr)
-        print("  export AMD_LLM_API_KEY='your-subscription-key'", file=sys.stderr)
+        sys.exit(1)
+
+    if PROXY_MODE not in {"claude", "openai"}:
+        print("Error: PROXY_MODE must be 'claude' or 'openai'.", file=sys.stderr)
         sys.exit(1)
 
     server = HTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
-    print(f"AMD LLM Gateway Proxy listening on http://{PROXY_HOST}:{PROXY_PORT}")
-    print(f"  Gateway: {AMD_LLM_BASE_URL}/claude3/...")
-    print("  API key: loaded from AMD_LLM_API_KEY")
-    print()
-    print("Point Claude Code at this proxy:")
-    print(f"  export ANTHROPIC_BASE_URL=http://localhost:{PROXY_PORT}")
-    print("  export ANTHROPIC_API_KEY=not-used")
-    print("  claude")
+    print(f"AMD proxy listening on http://{PROXY_HOST}:{PROXY_PORT}")
+    print(f"  mode   : {PROXY_MODE}")
+    print(f"  gateway: {AMD_LLM_BASE_URL}")
+    if PROXY_MODE == "claude":
+        print(f"  model  : {CLAUDE_DEFAULT_MODEL}")
+    else:
+        print(f"  upstream: {OPENAI_UPSTREAM_BASE_URL}")
+        print(f"  model   : {CODEX_DEFAULT_MODEL}")
+        print(f"  effort  : {CODEX_REASONING_EFFORT}")
     print()
 
     try:

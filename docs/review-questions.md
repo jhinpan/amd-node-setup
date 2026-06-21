@@ -2,14 +2,20 @@
 
 Decisions already made:
 
-- Publish as a full public GitHub repo.
+- Publish as a full public GitHub repo named `amd-node-setup`.
 - Human input contract is two values: container name and LLM Gateway application API key.
 - Keep `gh auth login` manual.
 - Use `SHM_SIZE=128G`.
 - Keep `--privileged`.
 - Set `SGLANG_USE_AITER=1` by default and make that visible to the user.
-- Do not bake model-specific launch presets into the default Docker flow.
+- Do not create reverse SSH tunnels.
+- Do not bake model-specific SGLang launch presets into the default Docker flow.
 - Let the agent detect model/cache/workspace mount paths on each node.
+- Start two proxy sessions in `tmux`:
+  - `amdproxy-claude` on `127.0.0.1:8082`
+  - `amdproxy-codex` on `127.0.0.1:8083`
+- Default Claude Code to Opus 4.8 with ultracode enabled through the generated wrapper.
+- Default Codex to GPT 5.5 with Codex `model_reasoning_effort = "xhigh"` for the requested ultrahigh behavior.
 
 Still worth validating on a real MI node:
 
@@ -26,7 +32,10 @@ Still worth validating on a real MI node:
   - Confirm apt metadata is available.
   - Confirm npm global installs land on PATH.
   - Confirm `claude --version` and `codex --version` work after setup.
-- Proxy path:
-  - `scripts/setup-agent-runtime.sh` starts `proxy/amd_proxy.py` in tmux by default.
-  - It writes both `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` for Claude Code compatibility.
-  - It prepares `OPENAI_API_KEY` for Codex, but Codex may still require `codex login` or an OpenAI-compatible gateway/base URL depending on release/account policy.
+- Claude proxy path:
+  - `proxy/amd_proxy.py` still uses the confirmed AMD Claude route `/claude3/{model}/chat/completions`.
+  - Confirm the LLM Gateway application key has access to `claude-opus-4-8`.
+- Codex proxy path:
+  - The default OpenAI-compatible upstream base is `https://llm-api.amd.com/v1`.
+  - If the real Gateway GPT/Codex endpoint differs, set `LLM_GATEWAY_OPENAI_BASE_URL` when creating the container.
+  - Confirm Codex accepts the generated `~/.codex/config.toml` and sends traffic to `127.0.0.1:8083`.

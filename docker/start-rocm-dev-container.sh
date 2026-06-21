@@ -24,11 +24,19 @@ set -Eeuo pipefail
 CONTAINER_NAME="${CONTAINER_NAME:-}"
 LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY:-${AMD_LLM_API_KEY:-}}"
 LLM_GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL:-https://llm-api.amd.com}"
-LLM_GATEWAY_OPENAI_BASE_URL="${LLM_GATEWAY_OPENAI_BASE_URL:-}"
+LLM_GATEWAY_OPENAI_BASE_URL="${LLM_GATEWAY_OPENAI_BASE_URL:-${AMD_OPENAI_BASE_URL:-}}"
 SHM_SIZE="${SHM_SIZE:-128G}"
 HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 SGLANG_USE_AITER="${SGLANG_USE_AITER:-1}"
 SGLANG_ROCM_FUSED_DECODE_MLA="${SGLANG_ROCM_FUSED_DECODE_MLA:-0}"
+CLAUDE_PROXY_PORT="${CLAUDE_PROXY_PORT:-8082}"
+CODEX_PROXY_PORT="${CODEX_PROXY_PORT:-8083}"
+CLAUDE_MODEL="${CLAUDE_MODEL:-claude-opus-4-8}"
+CLAUDE_EFFORT="${CLAUDE_EFFORT:-xhigh}"
+CLAUDE_ULTRACODE="${CLAUDE_ULTRACODE:-1}"
+CODEX_MODEL="${CODEX_MODEL:-gpt-5.5}"
+CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT:-xhigh}"
+CODEX_REASONING_LABEL="${CODEX_REASONING_LABEL:-ultrahigh}"
 INSTALL_TOOLS="${INSTALL_TOOLS:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 KEEP_CONTAINER_ALIVE_CMD="${KEEP_CONTAINER_ALIVE_CMD:-while true; do sleep 3600; done}"
@@ -173,7 +181,9 @@ gpu_family="$(detect_gpu_family)"
 image="$(latest_rocm720_image "${gpu_family}")"
 model_cache="$(detect_model_cache)"
 workspace="$(detect_workspace)"
-mkdir -p "${workspace}"
+if [[ "${DRY_RUN}" != "1" ]]; then
+  mkdir -p "${workspace}"
+fi
 
 docker_args=(
   run -d
@@ -197,9 +207,18 @@ docker_args=(
   -e AMD_LLM_API_KEY="${LLM_GATEWAY_API_KEY}"
   -e LLM_GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL}"
   -e AMD_LLM_BASE_URL="${LLM_GATEWAY_BASE_URL}"
+  -e CLAUDE_PROXY_PORT="${CLAUDE_PROXY_PORT}"
+  -e CODEX_PROXY_PORT="${CODEX_PROXY_PORT}"
+  -e CLAUDE_MODEL="${CLAUDE_MODEL}"
+  -e CLAUDE_EFFORT="${CLAUDE_EFFORT}"
+  -e CLAUDE_ULTRACODE="${CLAUDE_ULTRACODE}"
+  -e CODEX_MODEL="${CODEX_MODEL}"
+  -e CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT}"
+  -e CODEX_REASONING_LABEL="${CODEX_REASONING_LABEL}"
   -e HF_HOME=/sgl-workspace/models
-  -e AMD_NODE_RUNTIME_REPO=/opt/amd-node-runtime
-  -v "${repo_root}:/opt/amd-node-runtime:ro"
+  -e AMD_NODE_SETUP_REPO=/opt/amd-node-setup
+  -e AMD_NODE_RUNTIME_REPO=/opt/amd-node-setup
+  -v "${repo_root}:/opt/amd-node-setup:ro"
   -v "${workspace}:/sgl-workspace/workspace"
 )
 
@@ -211,12 +230,10 @@ if [[ -n "${LLM_GATEWAY_OPENAI_BASE_URL}" ]]; then
   docker_args+=(-e "LLM_GATEWAY_OPENAI_BASE_URL=${LLM_GATEWAY_OPENAI_BASE_URL}")
 fi
 
-docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-
 if [[ "${INSTALL_TOOLS}" == "1" ]]; then
-  container_cmd="/opt/amd-node-runtime/scripts/setup-dev-env.sh && /opt/amd-node-runtime/scripts/setup-agent-runtime.sh && ${KEEP_CONTAINER_ALIVE_CMD}"
+  container_cmd="/opt/amd-node-setup/scripts/setup-dev-env.sh && /opt/amd-node-setup/scripts/setup-agent-runtime.sh && ${KEEP_CONTAINER_ALIVE_CMD}"
 else
-  container_cmd="/opt/amd-node-runtime/scripts/setup-agent-runtime.sh && ${KEEP_CONTAINER_ALIVE_CMD}"
+  container_cmd="/opt/amd-node-setup/scripts/setup-agent-runtime.sh && ${KEEP_CONTAINER_ALIVE_CMD}"
 fi
 
 echo "GPU family       : ${gpu_family}"
@@ -224,6 +241,8 @@ echo "Docker image     : ${image}"
 echo "Container name   : ${CONTAINER_NAME}"
 echo "Shared memory    : ${SHM_SIZE}"
 echo "SGLANG_USE_AITER : ${SGLANG_USE_AITER}"
+echo "Claude proxy     : 127.0.0.1:${CLAUDE_PROXY_PORT} (${CLAUDE_MODEL}, ultracode/${CLAUDE_EFFORT})"
+echo "Codex proxy      : 127.0.0.1:${CODEX_PROXY_PORT} (${CODEX_MODEL}, ${CODEX_REASONING_LABEL}/${CODEX_REASONING_EFFORT})"
 echo "LLM Gateway key  : provided"
 echo "Model cache      : ${model_cache:-<none detected>}"
 echo "Workspace        : ${workspace}"
@@ -246,6 +265,7 @@ if [[ "${DRY_RUN}" == "1" ]]; then
   exit 0
 fi
 
+docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker "${docker_args[@]}" "${image}" bash -lc "${container_cmd}"
 
 echo

@@ -178,7 +178,7 @@ Tool versions:
 Next steps:
   - Run 'source ~/.bashrc' or open a new shell if uv was newly installed.
   - GitHub auth is intentionally manual; run 'gh auth login' if this node needs it.
-  - For Claude Code through AMDproxy, set ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN/API_KEY.
+  - Run scripts/setup-agent-runtime.sh to configure the Claude/Codex AMD proxy sessions.
 SUMMARY
 }
 
