@@ -55,6 +55,14 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 
+# requests' iter_content(decode_content=True) transparently decompresses the
+# upstream body, so the upstream Content-Encoding/Content-Length headers no
+# longer describe the bytes we relay. Forwarding Content-Encoding makes the
+# client try to gunzip/inflate already-decompressed plaintext, which surfaces
+# as a ZlibError/decompression error; forwarding the stale Content-Length can
+# truncate or hang the response. Drop both and let the framing be implicit.
+SKIP_RESPONSE_HEADERS = {"content-length", "content-encoding"}
+
 
 def json_dumps(obj: object) -> bytes:
     return json.dumps(obj, separators=(",", ":")).encode("utf-8")
@@ -112,6 +120,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
             code,
             {"type": "error", "error": {"type": "api_error", "message": message}},
         )
+
+    def _relay_response(self, response):
+        """Stream an upstream response to the client.
+
+        ``response.iter_content`` already decodes the upstream content-encoding,
+        so Content-Encoding/Content-Length are dropped to avoid client-side
+        decompression errors and stale framing.
+        """
+        self.send_response(response.status_code)
+        for key, value in response.headers.items():
+            lower_key = key.lower()
+            if lower_key in HOP_BY_HOP_HEADERS or lower_key in SKIP_RESPONSE_HEADERS:
+                continue
+            self.send_header(key, value)
+        self.end_headers()
+
+        for chunk in response.iter_content(chunk_size=65536):
+            if chunk:
+                self.wfile.write(chunk)
+                self.wfile.flush()
 
     def _send_openai_models(self):
         models = os.environ.get("AMD_PROXY_MODELS", CODEX_DEFAULT_MODEL)
@@ -172,16 +200,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self._send_error(502, f"Cannot reach OpenAI-compatible upstream: {exc}")
             return
 
-        self.send_response(response.status_code)
-        for key, value in response.headers.items():
-            if key.lower() not in HOP_BY_HOP_HEADERS:
-                self.send_header(key, value)
-        self.end_headers()
-
-        for chunk in response.iter_content(chunk_size=65536):
-            if chunk:
-                self.wfile.write(chunk)
-                self.wfile.flush()
+        self._relay_response(response)
 
     def _proxy_claude(self):
         path = urlparse(self.path).path
@@ -241,16 +260,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         # Relay the upstream response (SSE stream or JSON) through unchanged.
-        self.send_response(response.status_code)
-        for key, value in response.headers.items():
-            if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "content-length":
-                self.send_header(key, value)
-        self.end_headers()
-
-        for chunk in response.iter_content(chunk_size=65536):
-            if chunk:
-                self.wfile.write(chunk)
-                self.wfile.flush()
+        self._relay_response(response)
 
     def do_POST(self):
         if PROXY_MODE == "openai":
