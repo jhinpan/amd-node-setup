@@ -20,6 +20,12 @@ import requests
 
 AMD_LLM_API_KEY = os.environ.get("AMD_LLM_API_KEY", "")
 AMD_LLM_BASE_URL = os.environ.get("AMD_LLM_BASE_URL", "https://llm-api.amd.com").rstrip("/")
+# The AMD LLM API Gateway requires a `user: <NTID>` header on every request made
+# with a shared/app-level API key. For a single-user dev node this is a fixed
+# NTID; an inbound `user` header (if a client ever sends one) takes precedence.
+AMD_USER_NTID = os.environ.get(
+    "AMD_USER_NTID", os.environ.get("LLM_GATEWAY_USER_NTID", "")
+).strip()
 PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", "8082"))
 PROXY_MODE = os.environ.get("PROXY_MODE", "claude").lower()
@@ -121,6 +127,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             {"type": "error", "error": {"type": "api_error", "message": message}},
         )
 
+    def _resolve_user_ntid(self) -> str:
+        """NTID for the AMD gateway `user` header.
+
+        Prefer an inbound `user` header from the client; otherwise fall back to
+        the node-configured AMD_USER_NTID.
+        """
+        return (self.headers.get("user") or AMD_USER_NTID).strip()
+
     def _relay_response(self, response):
         """Stream an upstream response to the client.
 
@@ -182,8 +196,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             "Content-Type": self.headers.get("Content-Type", "application/json"),
             "Accept": self.headers.get("Accept", "application/json"),
         }
+        ntid = self._resolve_user_ntid()
+        if ntid:
+            headers["user"] = ntid
 
-        sys.stderr.write(f"[openai:{PROXY_PORT}] -> {upstream_url} model={model}\n")
+        sys.stderr.write(
+            f"[openai:{PROXY_PORT}] -> {upstream_url} model={model} user={ntid or '<none>'}\n"
+        )
         try:
             response = requests.request(
                 self.command,
@@ -238,10 +257,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             value = self.headers.get(fwd)
             if value:
                 headers[fwd] = value
+        ntid = self._resolve_user_ntid()
+        if ntid:
+            headers["user"] = ntid
 
         sys.stderr.write(
             f"[claude:{PROXY_PORT}] -> {url} model={model} "
-            f"(requested={requested_model}) stream={is_streaming}\n"
+            f"(requested={requested_model}) stream={is_streaming} user={ntid or '<none>'}\n"
         )
 
         try:
@@ -315,10 +337,19 @@ def main():
         print("Error: PROXY_MODE must be 'claude' or 'openai'.", file=sys.stderr)
         sys.exit(1)
 
+    if not AMD_USER_NTID:
+        print(
+            "Warning: AMD_USER_NTID is not set. The AMD LLM API Gateway requires a "
+            "`user: <NTID>` header for shared/app-level keys; requests may be "
+            "rejected until AMD_USER_NTID is configured.",
+            file=sys.stderr,
+        )
+
     server = HTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
     print(f"AMD proxy listening on http://{PROXY_HOST}:{PROXY_PORT}")
     print(f"  mode   : {PROXY_MODE}")
     print(f"  gateway: {AMD_LLM_BASE_URL}")
+    print(f"  ntid   : {AMD_USER_NTID or '<not set>'}")
     if PROXY_MODE == "claude":
         print(f"  model  : {CLAUDE_DEFAULT_MODEL}")
     else:

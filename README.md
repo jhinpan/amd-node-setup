@@ -124,6 +124,19 @@ LLM_GATEWAY_API_KEY=REPLACE_WITH_APPLICATION_KEY \
 bash docker/start-rocm-dev-container.sh
 ```
 
+The AMD LLM API Gateway requires a `user: <NTID>` header on every request made
+with a shared/app-level API key. Provide your NTID so both proxies attach it:
+
+```bash
+CONTAINER_NAME=my-amd-test \
+LLM_GATEWAY_API_KEY=REPLACE_WITH_APPLICATION_KEY \
+LLM_GATEWAY_USER_NTID=your-ntid \
+bash docker/start-rocm-dev-container.sh
+```
+
+For requests triggered by an individual user, use that user's NTID; for CI or
+automation not triggered by a person, use the service account's NTID.
+
 Preview detection and the generated Docker command without creating the container:
 
 ```bash
