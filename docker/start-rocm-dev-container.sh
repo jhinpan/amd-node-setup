@@ -23,6 +23,9 @@ set -Eeuo pipefail
 
 CONTAINER_NAME="${CONTAINER_NAME:-}"
 LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY:-${AMD_LLM_API_KEY:-}}"
+# NTID sent as the `user` header on every gateway request. Required by the AMD
+# LLM API Gateway for shared/app-level API keys.
+LLM_GATEWAY_USER_NTID="${LLM_GATEWAY_USER_NTID:-${AMD_USER_NTID:-}}"
 LLM_GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL:-https://llm-api.amd.com}"
 LLM_GATEWAY_OPENAI_BASE_URL="${LLM_GATEWAY_OPENAI_BASE_URL:-${AMD_OPENAI_BASE_URL:-}}"
 SHM_SIZE="${SHM_SIZE:-128G}"
@@ -238,6 +241,8 @@ docker_args=(
   -e SGLANG_ROCM_FUSED_DECODE_MLA="${SGLANG_ROCM_FUSED_DECODE_MLA}"
   -e LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY}"
   -e AMD_LLM_API_KEY="${LLM_GATEWAY_API_KEY}"
+  -e LLM_GATEWAY_USER_NTID="${LLM_GATEWAY_USER_NTID}"
+  -e AMD_USER_NTID="${LLM_GATEWAY_USER_NTID}"
   -e LLM_GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL}"
   -e AMD_LLM_BASE_URL="${LLM_GATEWAY_BASE_URL}"
   -e CLAUDE_PROXY_PORT="${CLAUDE_PROXY_PORT}"
@@ -277,8 +282,13 @@ echo "SGLANG_USE_AITER : ${SGLANG_USE_AITER}"
 echo "Claude proxy     : 127.0.0.1:${CLAUDE_PROXY_PORT} (${CLAUDE_MODEL}, ultracode/${CLAUDE_EFFORT})"
 echo "Codex proxy      : 127.0.0.1:${CODEX_PROXY_PORT} (${CODEX_MODEL}, ${CODEX_REASONING_LABEL}/${CODEX_REASONING_EFFORT})"
 echo "LLM Gateway key  : provided"
+echo "User NTID        : ${LLM_GATEWAY_USER_NTID:-<not set>}"
 echo "Model cache      : ${model_cache:-<none detected>}"
 echo "Workspace        : ${workspace}"
+
+if [[ -z "${LLM_GATEWAY_USER_NTID}" ]]; then
+  echo "WARN: LLM_GATEWAY_USER_NTID is not set; the AMD gateway requires a 'user: <NTID>' header for shared app keys" >&2
+fi
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   sanitized_docker_args=("${docker_args[@]}")

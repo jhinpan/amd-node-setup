@@ -8,6 +8,9 @@ set -Eeuo pipefail
 LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY:-${AMD_LLM_API_KEY:-}}"
 LLM_GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL:-${AMD_LLM_BASE_URL:-https://llm-api.amd.com}}"
 LLM_GATEWAY_OPENAI_BASE_URL="${LLM_GATEWAY_OPENAI_BASE_URL:-${AMD_OPENAI_BASE_URL:-${LLM_GATEWAY_BASE_URL%/}/openai}}"
+# NTID attached as the `user` header on every gateway request (required for
+# shared/app-level API keys).
+AMD_USER_NTID="${AMD_USER_NTID:-${LLM_GATEWAY_USER_NTID:-}}"
 
 PROXY_HOST="${PROXY_HOST:-127.0.0.1}"
 CLAUDE_PROXY_PORT="${CLAUDE_PROXY_PORT:-8082}"
@@ -163,6 +166,7 @@ umask 077
 {
   write_export AMD_LLM_API_KEY "${LLM_GATEWAY_API_KEY}"
   write_export AMD_LLM_BASE_URL "${LLM_GATEWAY_BASE_URL}"
+  write_export AMD_USER_NTID "${AMD_USER_NTID}"
   write_export PROXY_HOST "${PROXY_HOST}"
   write_export PROXY_PORT "${CLAUDE_PROXY_PORT}"
   write_export PROXY_MODE "claude"
@@ -173,6 +177,7 @@ umask 077
 {
   write_export AMD_LLM_API_KEY "${LLM_GATEWAY_API_KEY}"
   write_export AMD_LLM_BASE_URL "${LLM_GATEWAY_BASE_URL}"
+  write_export AMD_USER_NTID "${AMD_USER_NTID}"
   write_export PROXY_HOST "${PROXY_HOST}"
   write_export PROXY_PORT "${CODEX_PROXY_PORT}"
   write_export PROXY_MODE "openai"
