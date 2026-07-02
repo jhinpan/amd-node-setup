@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="2240" viewBox="0 0 1200 2240" role="img" aria-labelledby="title desc">
   <title id="title">amd-node-setup bare-metal MI node workflow</title>
-  <desc id="desc">Flowchart for setting up an AMD MI300 or MI350 bare-metal node with a ROCm SGLang Docker container, native Claude Code and Codex installs, and two local AMD gateway proxy sessions.</desc>
+  <desc id="desc">Flowchart for setting up an AMD MI300 or MI350 bare-metal node with a ROCm SGLang Docker container, native Claude Code and Codex installs, and conductor-local or TensorWave-to-n0809 proxy sessions.</desc>
   <defs>
     <marker id="arrow" markerWidth="14" markerHeight="14" refX="10" refY="5" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L10,5 L0,10 Z" fill="#31506f"/>
@@ -25,7 +25,7 @@
 
   <rect class="bg" x="0" y="0" width="1200" height="2240"/>
   <text class="title" x="600" y="54" text-anchor="middle">amd-node-setup Flow for Bare-Metal MI300 / MI350 Nodes</text>
-  <text class="subtitle" x="600" y="84" text-anchor="middle">Assumption: the agent is already on the target node; no reverse tunnel and no model-specific SGLang launch yet.</text>
+  <text class="subtitle" x="600" y="84" text-anchor="middle">Conductor n0809 can run key-backed proxy; TensorWave G45/G46/G05 can use n0809 forwards.</text>
 
   <rect class="box" x="310" y="120" width="580" height="96"/>
   <text class="label" x="600" y="152" text-anchor="middle">Start on Target AMD Node</text>
@@ -35,16 +35,16 @@
   <path class="edge" d="M600 216 L600 260"/>
 
   <rect class="box-soft" x="310" y="260" width="580" height="104"/>
-  <text class="label" x="600" y="292" text-anchor="middle">Two Required Inputs</text>
+  <text class="label" x="600" y="292" text-anchor="middle">Mode-Specific Inputs</text>
   <text class="text" x="600" y="319" text-anchor="middle">1. CONTAINER_NAME</text>
-  <text class="text" x="600" y="342" text-anchor="middle">2. LLM_GATEWAY_API_KEY from the LLM API Gateway application</text>
+  <text class="text" x="600" y="342" text-anchor="middle">2. Conductor key or TensorWave n0809 proxy SSH target</text>
 
   <path class="edge" d="M600 364 L600 414"/>
 
   <rect class="box" x="310" y="414" width="580" height="112"/>
   <text class="label" x="600" y="446" text-anchor="middle">Run Host Bootstrap Script</text>
   <text class="text" x="600" y="474" text-anchor="middle">bash docker/start-rocm-dev-container.sh</text>
-  <text class="small" x="600" y="500" text-anchor="middle">Validates both inputs before doing Docker work; DRY_RUN=1 only prints a masked command.</text>
+  <text class="small" x="600" y="500" text-anchor="middle">Validates inputs for PROXY_BACKEND=local or remote; DRY_RUN=1 prints a masked command.</text>
 
   <path class="edge" d="M600 526 L600 572"/>
 
@@ -109,22 +109,22 @@
   <rect class="box" x="250" y="1688" width="700" height="132"/>
   <text class="label" x="600" y="1722" text-anchor="middle">Configure Agent Runtime</text>
   <text class="text" x="600" y="1750" text-anchor="middle">Write ~/.amd-node-setup env files and PATH wrappers for claude/codex</text>
-  <text class="small" x="600" y="1777" text-anchor="middle">Write ~/.codex/config.toml: model=gpt-5.5, effort=xhigh, openai_base_url=http://127.0.0.1:8083/v1</text>
+  <text class="small" x="600" y="1777" text-anchor="middle">Write ~/.codex/config.toml: model=gpt-5.5, provider=amd_proxy_chat, base_url=http://127.0.0.1:8083/v1</text>
   <text class="small" x="600" y="1799" text-anchor="middle">Pin Claude Code to claude-opus-4-8 and enable ultracode through the wrapper</text>
 
   <path class="edge" d="M600 1820 L600 1866"/>
 
   <rect class="box-soft" x="110" y="1866" width="440" height="138"/>
-  <text class="label" x="330" y="1900" text-anchor="middle">Start Claude Proxy</text>
-  <text class="text" x="330" y="1928" text-anchor="middle">tmux session: amdproxy-claude</text>
+  <text class="label" x="330" y="1900" text-anchor="middle">Start Claude Proxy / Forward</text>
+  <text class="text" x="330" y="1928" text-anchor="middle">tmux: amdproxy-claude or amdproxy-claude-forward</text>
   <text class="text" x="330" y="1952" text-anchor="middle">local URL: http://127.0.0.1:8082</text>
   <text class="small" x="330" y="1979" text-anchor="middle">Mode: Anthropic Messages API to AMD /claude3/{model}/chat/completions</text>
 
   <rect class="box-soft" x="650" y="1866" width="440" height="138"/>
-  <text class="label" x="870" y="1900" text-anchor="middle">Start Codex Proxy</text>
-  <text class="text" x="870" y="1928" text-anchor="middle">tmux session: amdproxy-codex</text>
+  <text class="label" x="870" y="1900" text-anchor="middle">Start Codex Proxy / Forward</text>
+  <text class="text" x="870" y="1928" text-anchor="middle">tmux: amdproxy-codex or amdproxy-codex-forward</text>
   <text class="text" x="870" y="1952" text-anchor="middle">local URL: http://127.0.0.1:8083</text>
-  <text class="small" x="870" y="1979" text-anchor="middle">Mode: OpenAI-compatible passthrough to LLM_GATEWAY_OPENAI_BASE_URL</text>
+  <text class="small" x="870" y="1979" text-anchor="middle">Mode: Chat Completions passthrough to Unified/v1 or n0809 proxy</text>
 
   <path class="edge-soft" d="M600 1840 L330 1840 L330 1866"/>
   <path class="edge-soft" d="M600 1840 L870 1840 L870 1866"/>

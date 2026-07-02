@@ -3,9 +3,13 @@ set -Eeuo pipefail
 
 # Create a generic ROCm SGLang dev container for agent work.
 #
-# Required human inputs:
+# Required human inputs for the default local-proxy mode:
 #   CONTAINER_NAME=my-test
 #   LLM_GATEWAY_API_KEY=<application key from the LLM API Gateway>
+#
+# TensorWave nodes such as G45/G46/G05 can use proxies running on n0809:
+#   PROXY_BACKEND=remote
+#   REMOTE_PROXY_SSH_TARGET=<ssh target for n0809>
 #
 # The intended workflow is:
 #   CONTAINER_NAME=my-test LLM_GATEWAY_API_KEY=... bash docker/start-rocm-dev-container.sh
@@ -22,6 +26,7 @@ set -Eeuo pipefail
 #   SGLANG_ROCM_FUSED_DECODE_MLA=0
 
 CONTAINER_NAME="${CONTAINER_NAME:-}"
+AMD_NODE_CLASS="${AMD_NODE_CLASS:-${NODE_CLASS:-auto}}"
 LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY:-${AMD_LLM_API_KEY:-}}"
 # NTID sent as the `user` header on every gateway request. Required by the AMD
 # LLM API Gateway for shared/app-level API keys.
@@ -32,14 +37,32 @@ SHM_SIZE="${SHM_SIZE:-128G}"
 HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 SGLANG_USE_AITER="${SGLANG_USE_AITER:-1}"
 SGLANG_ROCM_FUSED_DECODE_MLA="${SGLANG_ROCM_FUSED_DECODE_MLA:-0}"
+PROXY_BACKEND="${PROXY_BACKEND:-local}"
+PROXY_HOST="${PROXY_HOST:-127.0.0.1}"
 CLAUDE_PROXY_PORT="${CLAUDE_PROXY_PORT:-8082}"
 CODEX_PROXY_PORT="${CODEX_PROXY_PORT:-8083}"
+CLAUDE_BASE_URL="${CLAUDE_BASE_URL:-http://127.0.0.1:${CLAUDE_PROXY_PORT}}"
+CODEX_BASE_URL="${CODEX_BASE_URL:-http://127.0.0.1:${CODEX_PROXY_PORT}/v1}"
+REMOTE_PROXY_SSH_TARGET="${REMOTE_PROXY_SSH_TARGET:-${N0809_SSH_TARGET:-}}"
+REMOTE_PROXY_SSH_OPTS="${REMOTE_PROXY_SSH_OPTS:-}"
+REMOTE_PROXY_START_SSH_TUNNELS="${REMOTE_PROXY_START_SSH_TUNNELS:-1}"
+REMOTE_CLAUDE_PROXY_HOST="${REMOTE_CLAUDE_PROXY_HOST:-127.0.0.1}"
+REMOTE_CODEX_PROXY_HOST="${REMOTE_CODEX_PROXY_HOST:-127.0.0.1}"
+REMOTE_CLAUDE_PROXY_PORT="${REMOTE_CLAUDE_PROXY_PORT:-${CLAUDE_PROXY_PORT}}"
+REMOTE_CODEX_PROXY_PORT="${REMOTE_CODEX_PROXY_PORT:-${CODEX_PROXY_PORT}}"
+FORWARD_SSH_AGENT="${FORWARD_SSH_AGENT:-0}"
+MOUNT_HOST_SSH="${MOUNT_HOST_SSH:-0}"
 CLAUDE_MODEL="${CLAUDE_MODEL:-claude-opus-4-8}"
 CLAUDE_EFFORT="${CLAUDE_EFFORT:-xhigh}"
 CLAUDE_ULTRACODE="${CLAUDE_ULTRACODE:-1}"
 CODEX_MODEL="${CODEX_MODEL:-gpt-5.5}"
 CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT:-xhigh}"
 CODEX_REASONING_LABEL="${CODEX_REASONING_LABEL:-ultrahigh}"
+CODEX_PROVIDER_ID="${CODEX_PROVIDER_ID:-amd_proxy_chat}"
+CODEX_PROVIDER_NAME="${CODEX_PROVIDER_NAME:-AMD LLM Gateway via OpenAI Chat Completions}"
+CODEX_PROVIDER_ENV_KEY="${CODEX_PROVIDER_ENV_KEY:-OPENAI_API_KEY}"
+CODEX_PROVIDER_WIRE_API="${CODEX_PROVIDER_WIRE_API:-chat}"
+CODEX_PROVIDER_HEADER_ENV_KEY="${CODEX_PROVIDER_HEADER_ENV_KEY:-}"
 INSTALL_TOOLS="${INSTALL_TOOLS:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 KEEP_CONTAINER_ALIVE_CMD="${KEEP_CONTAINER_ALIVE_CMD:-while true; do sleep 3600; done}"
@@ -49,13 +72,39 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+detect_node_class() {
+  if [[ "${AMD_NODE_CLASS}" != "auto" ]]; then
+    echo "${AMD_NODE_CLASS}"
+    return
+  fi
+
+  local host
+  host="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
+  if grep -Eiq '(^|[^[:alnum:]])n?0?809([^[:alnum:]]|$)|conductor' <<< "${host}"; then
+    echo "conductor"
+  elif grep -Eiq '(^|[^[:alnum:]])g(05|45|46|[0-9]+)([^[:alnum:]]|$)|tensorwave' <<< "${host}"; then
+    echo "tensorwave"
+  else
+    echo "unknown"
+  fi
+}
+
 if [[ -z "${CONTAINER_NAME}" ]]; then
   echo "ERROR: CONTAINER_NAME is required" >&2
   echo "Example: CONTAINER_NAME=my-test LLM_GATEWAY_API_KEY=... bash docker/start-rocm-dev-container.sh" >&2
   exit 1
 fi
 
-if [[ -z "${LLM_GATEWAY_API_KEY}" ]]; then
+case "${PROXY_BACKEND}" in
+  local|remote)
+    ;;
+  *)
+    echo "ERROR: PROXY_BACKEND must be 'local' or 'remote'" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "${PROXY_BACKEND}" == "local" && -z "${LLM_GATEWAY_API_KEY}" ]]; then
   echo "ERROR: LLM_GATEWAY_API_KEY is required" >&2
   echo "Provide the application API key from the LLM API Gateway." >&2
   exit 1
@@ -213,6 +262,7 @@ detect_workspace() {
   fi
 }
 
+node_class="$(detect_node_class)"
 gpu_family="$(detect_gpu_family)"
 image="$(latest_rocm720_image "${gpu_family}")"
 model_cache="$(detect_model_cache)"
@@ -237,28 +287,55 @@ docker_args=(
   --security-opt seccomp=unconfined
   --security-opt apparmor=unconfined
   -e HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES}"
+  -e AMD_NODE_CLASS="${node_class}"
   -e SGLANG_USE_AITER="${SGLANG_USE_AITER}"
   -e SGLANG_ROCM_FUSED_DECODE_MLA="${SGLANG_ROCM_FUSED_DECODE_MLA}"
-  -e LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY}"
-  -e AMD_LLM_API_KEY="${LLM_GATEWAY_API_KEY}"
-  -e LLM_GATEWAY_USER_NTID="${LLM_GATEWAY_USER_NTID}"
-  -e AMD_USER_NTID="${LLM_GATEWAY_USER_NTID}"
   -e LLM_GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL}"
   -e AMD_LLM_BASE_URL="${LLM_GATEWAY_BASE_URL}"
+  -e PROXY_BACKEND="${PROXY_BACKEND}"
+  -e PROXY_HOST="${PROXY_HOST}"
   -e CLAUDE_PROXY_PORT="${CLAUDE_PROXY_PORT}"
   -e CODEX_PROXY_PORT="${CODEX_PROXY_PORT}"
+  -e CLAUDE_BASE_URL="${CLAUDE_BASE_URL}"
+  -e CODEX_BASE_URL="${CODEX_BASE_URL}"
+  -e REMOTE_PROXY_SSH_TARGET="${REMOTE_PROXY_SSH_TARGET}"
+  -e REMOTE_PROXY_SSH_OPTS="${REMOTE_PROXY_SSH_OPTS}"
+  -e REMOTE_PROXY_START_SSH_TUNNELS="${REMOTE_PROXY_START_SSH_TUNNELS}"
+  -e REMOTE_CLAUDE_PROXY_HOST="${REMOTE_CLAUDE_PROXY_HOST}"
+  -e REMOTE_CODEX_PROXY_HOST="${REMOTE_CODEX_PROXY_HOST}"
+  -e REMOTE_CLAUDE_PROXY_PORT="${REMOTE_CLAUDE_PROXY_PORT}"
+  -e REMOTE_CODEX_PROXY_PORT="${REMOTE_CODEX_PROXY_PORT}"
   -e CLAUDE_MODEL="${CLAUDE_MODEL}"
   -e CLAUDE_EFFORT="${CLAUDE_EFFORT}"
   -e CLAUDE_ULTRACODE="${CLAUDE_ULTRACODE}"
   -e CODEX_MODEL="${CODEX_MODEL}"
   -e CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT}"
   -e CODEX_REASONING_LABEL="${CODEX_REASONING_LABEL}"
+  -e CODEX_PROVIDER_ID="${CODEX_PROVIDER_ID}"
+  -e CODEX_PROVIDER_NAME="${CODEX_PROVIDER_NAME}"
+  -e CODEX_PROVIDER_ENV_KEY="${CODEX_PROVIDER_ENV_KEY}"
+  -e CODEX_PROVIDER_WIRE_API="${CODEX_PROVIDER_WIRE_API}"
+  -e CODEX_PROVIDER_HEADER_ENV_KEY="${CODEX_PROVIDER_HEADER_ENV_KEY}"
   -e HF_HOME=/sgl-workspace/models
   -e AMD_NODE_SETUP_REPO=/opt/amd-node-setup
   -e AMD_NODE_RUNTIME_REPO=/opt/amd-node-setup
   -v "${repo_root}:/opt/amd-node-setup:ro"
   -v "${workspace}:/sgl-workspace/workspace"
 )
+
+if [[ -n "${LLM_GATEWAY_API_KEY}" ]]; then
+  docker_args+=(
+    -e LLM_GATEWAY_API_KEY="${LLM_GATEWAY_API_KEY}"
+    -e AMD_LLM_API_KEY="${LLM_GATEWAY_API_KEY}"
+  )
+fi
+
+if [[ -n "${LLM_GATEWAY_USER_NTID}" ]]; then
+  docker_args+=(
+    -e LLM_GATEWAY_USER_NTID="${LLM_GATEWAY_USER_NTID}"
+    -e AMD_USER_NTID="${LLM_GATEWAY_USER_NTID}"
+  )
+fi
 
 if [[ -n "${model_cache}" ]]; then
   docker_args+=(-v "${model_cache}:/sgl-workspace/models")
@@ -268,6 +345,22 @@ if [[ -n "${LLM_GATEWAY_OPENAI_BASE_URL}" ]]; then
   docker_args+=(-e "LLM_GATEWAY_OPENAI_BASE_URL=${LLM_GATEWAY_OPENAI_BASE_URL}")
 fi
 
+if [[ "${FORWARD_SSH_AGENT}" == "1" ]]; then
+  if [[ -z "${SSH_AUTH_SOCK:-}" || ! -S "${SSH_AUTH_SOCK}" ]]; then
+    echo "ERROR: FORWARD_SSH_AGENT=1 but SSH_AUTH_SOCK is not a socket" >&2
+    exit 1
+  fi
+  docker_args+=(-v "${SSH_AUTH_SOCK}:/ssh-agent" -e SSH_AUTH_SOCK=/ssh-agent)
+fi
+
+if [[ "${MOUNT_HOST_SSH}" == "1" ]]; then
+  if [[ -z "${HOME:-}" || ! -d "${HOME}/.ssh" ]]; then
+    echo "ERROR: MOUNT_HOST_SSH=1 but ~/.ssh was not found" >&2
+    exit 1
+  fi
+  docker_args+=(-v "${HOME}/.ssh:/root/.ssh:ro")
+fi
+
 if [[ "${INSTALL_TOOLS}" == "1" ]]; then
   container_cmd="/opt/amd-node-setup/scripts/setup-dev-env.sh && /opt/amd-node-setup/scripts/setup-agent-runtime.sh && ${KEEP_CONTAINER_ALIVE_CMD}"
 else
@@ -275,18 +368,26 @@ else
 fi
 
 echo "GPU family       : ${gpu_family}"
+echo "Node class       : ${node_class}"
 echo "Docker image     : ${image}"
 echo "Container name   : ${CONTAINER_NAME}"
 echo "Shared memory    : ${SHM_SIZE}"
 echo "SGLANG_USE_AITER : ${SGLANG_USE_AITER}"
-echo "Claude proxy     : 127.0.0.1:${CLAUDE_PROXY_PORT} (${CLAUDE_MODEL}, ultracode/${CLAUDE_EFFORT})"
-echo "Codex proxy      : 127.0.0.1:${CODEX_PROXY_PORT} (${CODEX_MODEL}, ${CODEX_REASONING_LABEL}/${CODEX_REASONING_EFFORT})"
-echo "LLM Gateway key  : provided"
-echo "User NTID        : ${LLM_GATEWAY_USER_NTID:-<not set>}"
+echo "Proxy backend    : ${PROXY_BACKEND}"
+echo "Claude endpoint  : ${CLAUDE_BASE_URL} (${CLAUDE_MODEL}, ultracode/${CLAUDE_EFFORT})"
+echo "Codex endpoint   : ${CODEX_BASE_URL} (${CODEX_MODEL}, ${CODEX_REASONING_LABEL}/${CODEX_REASONING_EFFORT})"
+if [[ "${PROXY_BACKEND}" == "remote" ]]; then
+  echo "Remote SSH target: ${REMOTE_PROXY_SSH_TARGET:-<none; expecting direct URLs or pre-existing forwards>}"
+  echo "Remote Claude    : ${REMOTE_CLAUDE_PROXY_HOST}:${REMOTE_CLAUDE_PROXY_PORT}"
+  echo "Remote Codex     : ${REMOTE_CODEX_PROXY_HOST}:${REMOTE_CODEX_PROXY_PORT}"
+else
+  echo "LLM Gateway key  : provided"
+  echo "User NTID        : ${LLM_GATEWAY_USER_NTID:-<not set>}"
+fi
 echo "Model cache      : ${model_cache:-<none detected>}"
 echo "Workspace        : ${workspace}"
 
-if [[ -z "${LLM_GATEWAY_USER_NTID}" ]]; then
+if [[ "${PROXY_BACKEND}" == "local" && -z "${LLM_GATEWAY_USER_NTID}" ]]; then
   echo "WARN: LLM_GATEWAY_USER_NTID is not set; the AMD gateway requires a 'user: <NTID>' header for shared app keys" >&2
 fi
 

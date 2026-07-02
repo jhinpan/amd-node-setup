@@ -46,7 +46,7 @@ CODEX_DEFAULT_MODEL = os.environ.get("CODEX_DEFAULT_MODEL", "gpt-5.5")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "xhigh")
 OPENAI_UPSTREAM_BASE_URL = os.environ.get(
     "OPENAI_UPSTREAM_BASE_URL",
-    os.environ.get("LLM_GATEWAY_OPENAI_BASE_URL", f"{AMD_LLM_BASE_URL}/v1"),
+    os.environ.get("LLM_GATEWAY_OPENAI_BASE_URL", f"{AMD_LLM_BASE_URL}/Unified/v1"),
 ).rstrip("/")
 
 
