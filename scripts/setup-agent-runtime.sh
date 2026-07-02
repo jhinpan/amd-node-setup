@@ -339,6 +339,7 @@ fi
   echo "export PATH=\"${RUNTIME_BIN_DIR}:\$HOME/.local/bin:\$PATH\""
   echo "[ -f \"${RUNTIME_DIR}/claude-env.sh\" ] && . \"${RUNTIME_DIR}/claude-env.sh\""
   echo "[ -f \"${RUNTIME_DIR}/codex-env.sh\" ] && . \"${RUNTIME_DIR}/codex-env.sh\""
+  echo "alias yolo='IS_SANDBOX=1 claude --dangerously-skip-permissions'"
 } > "${RUNTIME_DIR}/env.sh"
 
 chmod 600 "${RUNTIME_DIR}"/*.env "${RUNTIME_DIR}/claude-env.sh" "${RUNTIME_DIR}/codex-env.sh" "${RUNTIME_DIR}/env.sh"
@@ -393,6 +394,7 @@ ${proxy_session_summary}
 
 Default commands after opening a new shell:
   claude
+  yolo
   codex
 
 Health checks:

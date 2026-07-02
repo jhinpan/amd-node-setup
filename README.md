@@ -309,6 +309,12 @@ bin/claude                   # wrapper around the installed Claude Code binary
 bin/codex                    # wrapper around the installed Codex binary
 ```
 
+`env.sh` also defines a convenience alias for sandboxed, permission-skipping Claude Code sessions:
+
+```bash
+alias yolo='IS_SANDBOX=1 claude --dangerously-skip-permissions'
+```
+
 It also writes `~/.codex/config.toml` with:
 
 ```toml
@@ -353,6 +359,7 @@ The generated wrappers source `~/.amd-node-setup/claude-env.sh` and `~/.amd-node
 
 ```bash
 claude
+yolo
 codex
 ```
 
